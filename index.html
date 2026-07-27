@@ -49,7 +49,6 @@
 <div id="log-panel"></div>
 
 <script>
-  // 開発インフラ・プラットフォームの定義
   let board = Array.from({length: 9}, () => Array(9).fill(null)); // 9ブロック×9セル
   let emptyCount = 81;
   let wallCount = { white: 3, black: 4 };
@@ -92,7 +91,7 @@
     logPanel.scrollTop = logPanel.scrollHeight;
   }
 
-  // ブロック単位での利回り（3目並び）を検知してスコア算出
+  // 各3x3ブロック内での3目並びを検知しスコア算出
   function calculateScores() {
     let whiteScore = 0;
     let blackScore = 0;
@@ -176,7 +175,6 @@
         btnDeclare.style.background = "linear-gradient(135deg, #66fcf1, #45f3ff)";
         btnDeclare.style.color = "#0b0c10";
       }
-      // 準備フェーズ・スライドフェーズ、または壁残数0なら無効化
       if (wallCount[currentPlayer] <= 0 || gamePhase === 'setup' || gamePhase === 'slide') {
         btnDeclare.disabled = true;
       } else {
@@ -199,9 +197,7 @@
     if (board[b][c] !== null) return false;
 
     if (gamePhase === 'setup') {
-      // 準備フェーズは四隅(0, 2, 6, 8)のみ
       if (!CORNER_BLOCKS.includes(b)) return false;
-      // 重複配置制限: 「自色の石は最大1個まで」
       const myColor = currentPlayer;
       const alreadyHasMyColor = board[b].some(stone => stone === myColor);
       if (alreadyHasMyColor) return false;
@@ -245,7 +241,6 @@
         logMessage(`${currentPlayer === 'white' ? '白' : '黒'}が B${b+1} 内に石を配置。`);
       }
 
-      // 配置後の処理
       emptyCount = countEmptyCells();
       if (emptyCount <= 15) {
         logMessage("市場流動性低下（空きマス15以下）のため、スライド不可。自動ターン交代！");
@@ -269,49 +264,97 @@
     renderBoard();
   }
 
+  // スライドは「指定された3x3ブロック【内】のみ」で循環（トーラス移動）
   function executeSlide(b, direction) {
     if (gamePhase !== 'slide') return;
     if (slideLockedBlocks.includes(b)) return;
 
-    const row = Math.floor(b / 3);
-    const col = b % 3;
-    let affectedBlocks = [];
+    const block = board[b]; // 選択された3x3ブロックのセル配列
 
-    // トポロジー的な流動（ループ）スライド処理
-    if (direction === 'up') {
-      affectedBlocks = [col, 3 + col, 6 + col];
-      const temp = board[col];
-      board[col] = board[3 + col];
-      board[3 + col] = board[6 + col];
-      board[6 + col] = temp;
-      logMessage(`列 ${col + 1} を上方向にスライド（ポートフォリオ変更）。`);
-    } else if (direction === 'down') {
-      affectedBlocks = [col, 3 + col, 6 + col];
-      const temp = board[6 + col];
-      board[6 + col] = board[3 + col];
-      board[3 + col] = board[col];
-      board[col] = temp;
-      logMessage(`列 ${col + 1} を下方向にスライド（ポートフォリオ変更）。`);
+    if (direction === 'right') {
+      // 上段: 0->1, 1->2, 2->0
+      let temp0 = block[2];
+      block[2] = block[1];
+      block[1] = block[0];
+      block[0] = temp0;
+
+      // 中段: 3->4, 4->5, 5->3
+      let temp1 = block[5];
+      block[5] = block[4];
+      block[4] = block[3];
+      block[3] = temp1;
+
+      // 下段: 6->7, 7->8, 8->6
+      let temp2 = block[8];
+      block[8] = block[7];
+      block[7] = block[6];
+      block[6] = temp2;
+
+      logMessage(`B${b + 1}内のマスを右へトーラス循環スライド完了！`);
     } else if (direction === 'left') {
-      const start = row * 3;
-      affectedBlocks = [start, start + 1, start + 2];
-      const temp = board[start];
-      board[start] = board[start + 1];
-      board[start + 1] = board[start + 2];
-      board[start + 2] = temp;
-      logMessage(`行 ${row + 1} を左方向にスライド（ポートフォリオ変更）。`);
-    } else if (direction === 'right') {
-      const start = row * 3;
-      affectedBlocks = [start, start + 1, start + 2];
-      const temp = board[start + 2];
-      board[start + 2] = board[start + 1];
-      board[start + 1] = board[start];
-      board[start] = temp;
-      logMessage(`行 ${row + 1} を右方向にスライド（ポートフォリオ変更）。`);
+      // 上段: 0<-1, 1<-2, 2<-0
+      let temp0 = block[0];
+      block[0] = block[1];
+      block[1] = block[2];
+      block[2] = temp0;
+
+      // 中段: 3<-4, 4<-5, 5<-3
+      let temp1 = block[3];
+      block[3] = block[4];
+      block[4] = block[5];
+      block[5] = temp1;
+
+      // 下段: 6<-7, 7<-8, 8<-6
+      let temp2 = block[6];
+      block[6] = block[7];
+      block[7] = block[8];
+      block[8] = temp2;
+
+      logMessage(`B${b + 1}内のマスを左へトーラス循環スライド完了！`);
+    } else if (direction === 'down') {
+      // 左列: 0->3, 3->6, 6->0
+      let temp0 = block[6];
+      block[6] = block[3];
+      block[3] = block[0];
+      block[0] = temp0;
+
+      // 中列: 1->4, 4->7, 7->1
+      let temp1 = block[7];
+      block[7] = block[4];
+      block[4] = block[1];
+      block[1] = temp1;
+
+      // 右列: 2->5, 5->8, 8->2
+      let temp2 = block[8];
+      block[8] = block[5];
+      block[5] = block[2];
+      block[2] = temp2;
+
+      logMessage(`B${b + 1}内のマスを下へトーラス循環スライド完了！`);
+    } else if (direction === 'up') {
+      // 左列: 0<-3, 3<-6, 6<-0
+      let temp0 = block[0];
+      block[0] = block[3];
+      block[3] = block[6];
+      block[6] = temp0;
+
+      // 中列: 1<-4, 4<-7, 7<-1
+      let temp1 = block[1];
+      block[1] = block[4];
+      block[4] = block[7];
+      block[7] = temp1;
+
+      // 右列: 2<-5, 5<-8, 8<-2
+      let temp2 = block[2];
+      block[2] = block[5];
+      block[5] = block[8];
+      block[8] = temp2;
+
+      logMessage(`B${b + 1}内のマスを上へトーラス循環スライド完了！`);
     }
 
-    // スライドされたブロック全てを次のターンのロック対象に設定
-    slideLockedBlocks = affectedBlocks;
+    // スライド操作が行われた特定のブロックのみを次のターンのロック対象（赤枠）に設定
+    slideLockedBlocks = [b];
     selectedBlock = null;
 
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
@@ -322,7 +365,7 @@
   function skipSlide() {
     if (gamePhase !== 'slide') return;
     logMessage(`${currentPlayer === 'white' ? '白' : '黒'}はリバランス(スライド)をスキップ、現状維持を選択！`);
-    slideLockedBlocks = []; // スキップした場合は直前スライド制限をリセット
+    slideLockedBlocks = []; // スキップした場合は直前スライド制限をクリア
     selectedBlock = null;
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
@@ -342,7 +385,7 @@
       btn.className = `arrow-btn ${d.class}`;
       btn.innerText = d.symbol;
       btn.addEventListener('click', (e) => {
-        e.stopPropagation(); // 親要素のブロック選択イベントなどを防ぐ
+        e.stopPropagation();
         executeSlide(b, d.dir);
       });
       blockEl.appendChild(btn);
@@ -404,7 +447,7 @@
         blockEl.appendChild(cellEl);
       }
 
-      // 選択されたブロックに直感的なアローボタンを動的に配備！
+      // 選択されたブロックにアローボタンを動的に配備！
       if (selectedBlock === b && gamePhase === 'slide' && emptyCount > 15) {
         addArrowButtons(blockEl, b);
       }
