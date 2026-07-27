@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Nine Topology v1.5</title>
 <style>
-  /* iPhone SEの狭いアセット画面に最適化したネオンサイバー・スタイル */
   body {
     background-color: #0b0c10;
     color: #c5c6c7;
@@ -18,728 +17,529 @@
     touch-action: manipulation;
     overflow-x: hidden;
   }
-  h1 {
-    font-size: 1.1rem;
-    color: #66fcf1;
-    text-shadow: 0 0 8px rgba(102,252,241,0.5);
-    margin: 4px 0;
-    text-align: center;
-  }
+  h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
   #status-panel {
-    width: 100%;
-    max-width: 340px;
-    background: rgba(31, 40, 51, 0.8);
-    border: 1px solid #45f3ff;
-    border-radius: 6px;
-    padding: 6px;
-    margin-bottom: 6px;
-    box-sizing: border-box;
-    font-size: 0.75rem;
-    box-shadow: 0 0 10px rgba(69,243,255,0.15);
+    width: 100%; max-width: 340px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff;
+    border-radius: 6px; padding: 6px; margin-bottom: 6px; box-sizing: border-box; font-size: 0.75rem;
   }
-  .flex-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 2px;
-  }
-  /* 9x9（3x3ブロックのアセンブリ） */
+  .flex-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
   #board-container {
-    position: relative;
-    width: 324px;
-    height: 324px;
-    background: #1f2833;
-    border: 3px solid #66fcf1;
-    box-shadow: 0 0 15px rgba(102,252,241,0.3);
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-    gap: 4px; /* ブロック間の物理的遮断境界 */
-    padding: 4px;
-    box-sizing: border-box;
-    border-radius: 6px;
+    position: relative; width: 324px; height: 324px; background: #1f2833; border: 3px solid #66fcf1;
+    display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+    gap: 4px; padding: 4px; box-sizing: border-box; border-radius: 6px;
+    overflow: visible; /* 矢印ボタンがはみ出して表示されるようにする */
   }
-  .block {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(3, 1fr);
-    gap: 1px;
+  .block { 
+    display: grid; 
+    grid-template-columns: repeat(3, 1fr); 
+    grid-template-rows: repeat(3, 1fr); 
+    gap: 1px; 
+    background: #0b0c10; 
+    border-radius: 2px; 
+    position: relative; /* 矢印ボタンの基準点とするため */
+    border: 2px solid transparent; /* 枠線付与時のサイズズレを防止 */
+    box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .block.locked { border: 2px solid #ff0055 !important; box-shadow: inset 0 0 8px rgba(255,0,85,0.5); }
+  .block.selectable { cursor: pointer; }
+  .block.selectable:hover { border-color: rgba(102, 252, 241, 0.5); }
+  .block.selected { border: 2px solid #66fcf1 !important; box-shadow: 0 0 12px #66fcf1; z-index: 5; }
+  
+  .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; position: relative; }
+  .cell.highlight { background: rgba(102,252,241,0.2); cursor: pointer; }
+  .cell.highlight:hover { background: rgba(102,252,241,0.4); }
+  
+  .stone { width: 82%; height: 82%; border-radius: 50%; }
+  .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
+  .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
+  .stone.red { background: radial-gradient(circle, #ff0055 30%, #990022 90%); box-shadow: 0 0 10px #ff0055; border-radius: 4px; }
+  .stone.blue { background: radial-gradient(circle, #00ffcc 30%, #0044cc 90%); box-shadow: 0 0 10px #00ffcc; }
+
+  /* 直感的なスライド矢印ボタンのスタイル */
+  .arrow-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
     background: #0b0c10;
-    box-sizing: border-box;
-    border-radius: 2px;
-    transition: all 0.3s;
-  }
-  /* 局所ロック時の警告エフェクト */
-  .block.locked {
-    border: 1px solid #ff0055;
-    box-shadow: inset 0 0 8px rgba(255,0,85,0.5);
-  }
-  .cell {
-    background: #1f2833;
+    border: 2px solid #66fcf1;
+    color: #66fcf1;
+    font-weight: bold;
+    font-size: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
-    box-sizing: border-box;
-  }
-  .cell.highlight {
-    background: rgba(102,252,241,0.2);
-  }
-  /* 各種カラーアセット（石） */
-  .stone {
-    width: 82%;
-    height: 82%;
-    border-radius: 50%;
-    transition: transform 0.2s ease-in-out;
-  }
-  .stone.white {
-    background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%);
-    box-shadow: 0 0 8px #ffffff;
-  }
-  .stone.black {
-    background: radial-gradient(circle, #4b5d67 10%, #000000 90%);
-    box-shadow: 0 0 8px #000000;
-    border: 1px solid #333;
-  }
-  .stone.red {
-    background: radial-gradient(circle, #ff0055 30%, #990022 90%);
-    box-shadow: 0 0 10px #ff0055;
-    border-radius: 4px; /* 絶対障壁のソリッド感 */
-  }
-  .stone.blue {
-    background: radial-gradient(circle, #00ffcc 30%, #0044cc 90%);
-    box-shadow: 0 0 10px #00ffcc;
-  }
-  /* 操作・財務パネル */
-  #control-panel {
-    width: 100%;
-    max-width: 340px;
-    margin-top: 6px;
-    background: rgba(31, 40, 51, 0.8);
-    border: 1px solid #45f3ff;
-    border-radius: 6px;
-    padding: 6px;
-    box-sizing: border-box;
-    text-align: center;
-    font-size: 0.8rem;
-  }
-  button {
-    background: linear-gradient(135deg, #66fcf1, #45f3ff);
-    border: none;
-    color: #0b0c10;
-    padding: 6px 10px;
-    font-weight: bold;
-    border-radius: 4px;
-    margin: 2px;
     cursor: pointer;
-    font-size: 0.75rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    position: absolute;
+    z-index: 100;
+    box-shadow: 0 0 8px #66fcf1;
+    transition: background 0.2s, transform 0.1s, color 0.2s;
   }
-  button:active {
-    transform: scale(0.95);
+  .arrow-btn:hover {
+    background: #66fcf1;
+    color: #0b0c10;
   }
-  button:disabled {
-    background: #3a3d40;
-    color: #6c757d;
-    box-shadow: none;
+  .arrow-btn:active {
+    transform: scale(0.9);
   }
-  .slide-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 4px;
-  }
-  .row-flex {
-    display: flex;
-    justify-content: center;
-    gap: 2px;
-    flex-wrap: wrap;
-  }
-  #log-panel {
-    width: 100%;
-    max-width: 340px;
-    height: 52px;
-    overflow-y: auto;
-    background: #000;
-    border: 1px solid #45f3ff;
-    border-radius: 4px;
-    margin-top: 4px;
-    padding: 4px;
-    box-sizing: border-box;
-    font-family: monospace;
-    font-size: 0.65rem;
-    color: #66fcf1;
-    text-align: left;
-  }
+  .arrow-up { top: -14px; left: calc(50% - 14px); }
+  .arrow-down { bottom: -14px; left: calc(50% - 14px); }
+  .arrow-left { left: -14px; top: calc(50% - 14px); }
+  .arrow-right { right: -14px; top: calc(50% - 14px); }
+
+  #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
+  button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #log-panel { width: 100%; max-width: 340px; height: 52px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; border-radius: 4px; margin-top: 4px; padding: 4px; box-sizing: border-box; font-family: monospace; font-size: 0.65rem; color: #66fcf1; text-align: left; }
 </style>
 </head>
 <body>
-
 <h1>NINE TOPOLOGY v1.5</h1>
-
-<!-- ステータス・財務パネル -->
 <div id="status-panel">
-  <div class="flex-row">
-    <span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span>
-    <span><b>空きマス残:</b> <span id="empty-count">79</span></span>
-  </div>
-  <div class="flex-row">
-    <span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span>
-    <span><b>黒ポイント:</b> <span id="score-p2" style="color:#000; text-shadow:0 0 2px #fff;">0</span> (壁残:<span id="wall-p2">4</span>)</span>
-  </div>
-  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;">
-    <span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">スライド稼働中</span></span>
-    <span id="countdown" style="color:#ff0055;"></span>
-  </div>
+  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>空きマス残:</b> <span id="empty-count">79</span></span></div>
+  <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#000;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">スライド稼働中</span></span><span id="countdown" style="color:#ff0055;"></span></div>
 </div>
-
-<!-- 9x9アセンブリ盤面 -->
-<div id="board-container" id="board"></div>
-
-<!-- コントロール・アロケーションパネル -->
+<div id="board-container"></div>
 <div id="control-panel">
   <div id="phase-instruction">石を配置する空きマスをタップしてください。</div>
-  
   <div id="secret-wall-zone" style="margin-top:4px;">
     <button id="btn-declare-wall" onclick="toggleWallDeclaration()">赤石(絶対障壁)をシークレット申告</button>
   </div>
-
-  <div id="slide-zone" style="display:none; margin-top:4px;">
-    <div class="slide-controls">
-      <div><b>スライドするブロック(1-9)を選択:</b></div>
-      <div class="row-flex" id="block-select-buttons"></div>
-      <div id="slide-action-subzone" style="display:none; margin-top:4px;">
-        <div class="row-flex">
-          <button onclick="setSlideLine('row', 0)">行1</button>
-          <button onclick="setSlideLine('row', 1)">行2</button>
-          <button onclick="setSlideLine('row', 2)">行3</button>
-          <button onclick="setSlideLine('col', 0)">列1</button>
-          <button onclick="setSlideLine('col', 1)">列2</button>
-          <button onclick="setSlideLine('col', 2)">列3</button>
-        </div>
-        <div class="row-flex" style="margin-top:3px;">
-          <button style="background:#ff0055; color:#fff;" onclick="executeSlide('prev')">← / ↑ スライド</button>
-          <button style="background:#ff0055; color:#fff;" onclick="executeSlide('next')">→ / ↓ スライド</button>
-        </div>
-      </div>
-      <button style="background:#555; color:#fff; width:100%; margin-top:4px;" onclick="skipSlide()">スライド処理をスキップ（パス）</button>
-    </div>
+  <div id="skip-zone" style="margin-top:6px; display:none;">
+    <button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">スライドをスキップ</button>
   </div>
 </div>
-
-<!-- ログパネル -->
-<div id="log-panel" id="log"></div>
+<div id="log-panel"></div>
 
 <script>
-  // 財務・アセット状況
-  let board = Array(9).fill(null).map(() => Array(9).fill(0)); // 0:空, 1:白, 2:黒, 3:赤(絶対障壁), 4:青(ボーナス)
-  let currentPlayer = 1; // 1: 先手(白), 2: 後手(黒)
-  let scores = { 1: 0, 2: 0 };
-  let wallsLeft = { 1: 3, 2: 4 };
-  let currentTurn = 1;
+// --- ゲーム管理変数 ---
+let board = []; // 9ブロック * 9セルの2次元配列
+let currentPlayer = 1; // 1: 白(先手), 2: 黒(後手)
+let scores = { 1: 0, 2: 0 };
+let walls = { 1: 3, 2: 4 };
+let secretWallDeclared = false;
+let phase = 'place'; // 'place' (配置フェーズ) または 'slide' (スライドフェーズ)
+let selectedBlock = null; // 選択中のブロックインデックス (0~8)
+let lockedBlock = null; // 直前にスライドされてロックされているブロック (0~8)
+let timeLeft = 30;
+let timerInterval = null;
+let isGameOver = false;
 
-  let currentPhase = 'PLACE'; // PLACE -> SLIDE
-  let selectedBlockForSlide = null;
-  let selectedLineType = null; // 'row' or 'col'
-  let selectedLineIdx = null; // 0, 1, 2
+// --- 初期化処理 ---
+function initGame() {
+  // 9x9 の盤面データを初期化
+  board = Array(9).fill(null).map(() => Array(9).fill(null));
   
-  let forcedSkipSlide = false; // 9マス目設置によるロックアクション消化フラグ
-  let wallDeclarationMode = false;
-  let declarations = []; // { player, targetTurn, r, c }
+  // 初期石配置（中央ブロックB5の中心に白、その右に黒を配置し、空きマス残を79にする）
+  board[4][4] = 'white';
+  board[4][5] = 'black';
   
-  let boardHistory = []; // コウの同型反復防止用スタック
+  currentPlayer = 1;
+  scores = { 1: 0, 2: 0 };
+  walls = { 1: 3, 2: 4 };
+  secretWallDeclared = false;
+  phase = 'place';
+  selectedBlock = null;
+  lockedBlock = null;
+  isGameOver = false;
+  
+  document.getElementById('log-panel').innerHTML = '';
+  addLog("ゲームが開始されました。白の手番です。");
+  
+  updateScores();
+  resetTimer();
+  render();
+}
 
-  // 初期配置：青石(ボーナスポイント石)をランダムに2個デポジット
-  function initGame() {
-    let placed = 0;
-    while(placed < 2) {
-      let r = Math.floor(Math.random() * 9);
-      let c = Math.floor(Math.random() * 9);
-      if(board[r][c] === 0) {
-        board[r][c] = 4; // 青石アセット
-        placed++;
-      }
-    }
-    renderBoard();
-    updateUI();
-    writeLog("ゲーム起動。青石が2個、初期アセットとしてデポジットされました。");
-  }
+// --- ログ出力 ---
+function addLog(msg) {
+  const logPanel = document.getElementById('log-panel');
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  logPanel.innerHTML += `<div>[${time}] ${msg}</div>`;
+  logPanel.scrollTop = logPanel.scrollHeight;
+}
 
-  // 描画インフラ
-  function renderBoard() {
-    const container = document.getElementById('board-container');
-    container.innerHTML = '';
-    
-    // 3x3のブロック単位でレンダリング
-    for (let bi = 0; bi < 3; bi++) {
-      for (let bj = 0; bj < 3; bj++) {
-        const blockIdx = bi * 3 + bj;
-        const blockDiv = document.createElement('div');
-        blockDiv.className = 'block';
-        blockDiv.id = `block-${blockIdx}`;
-        
-        // 局所ロック判定（9マス全埋まり）
-        if (isBlockFull(blockIdx)) {
-          blockDiv.classList.add('locked');
-        }
+// --- スコア・トポロジー並び判定 ---
+// 各3x3ブロック内で縦・横・斜めに3つ同色が並んだライン数をポイントとする
+function updateScores() {
+  let p1Score = 0;
+  let p2Score = 0;
+  const winLines = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // 横
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // 縦
+    [0, 4, 8], [2, 4, 6]             // 斜め
+  ];
 
-        // ブロック内の9マスを描画
-        for (let i = 0; i < 3; i++) {
-          for (let j = 0; j < 3; j++) {
-            const r = bi * 3 + i;
-            const c = bj * 3 + j;
-            const cellDiv = document.createElement('div');
-            cellDiv.className = 'cell';
-            cellDiv.dataset.r = r;
-            cellDiv.dataset.c = c;
-            
-            // 申告モード中、空きマスをハイライト
-            if (wallDeclarationMode && board[r][c] === 0) {
-              cellDiv.classList.add('highlight');
-            }
+  for (let b = 0; b < 9; b++) {
+    const block = board[b];
+    winLines.forEach(line => {
+      const [x, y, z] = line;
+      const valX = block[x];
+      const valY = block[y];
+      const valZ = block[z];
 
-            cellDiv.onclick = () => handleCellClick(r, c);
+      if (!valX || !valY || !valZ) return;
+      // 赤石（シークレット含む）が混ざっているラインはどちらの得点にもならない
+      if (isRed(valX) || isRed(valY) || isRed(valZ)) return;
 
-            const val = board[r][c];
-            if (val > 0) {
-              const stoneDiv = document.createElement('div');
-              stoneDiv.className = 'stone';
-              if (val === 1) stoneDiv.classList.add('white');
-              if (val === 2) stoneDiv.classList.add('black');
-              if (val === 3) stoneDiv.classList.add('red');
-              if (val === 4) stoneDiv.classList.add('blue');
-              cellDiv.appendChild(stoneDiv);
-            }
-            blockDiv.appendChild(cellDiv);
-          }
-        }
-        container.appendChild(blockDiv);
-      }
-    }
-  }
-
-  // ブロックがすべて埋まっているか判定
-  function isBlockFull(blockIdx) {
-    const bi = Math.floor(blockIdx / 3) * 3;
-    const bj = (blockIdx % 3) * 3;
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 3; j++) {
-        if (board[bi + i][bj + j] === 0) return false;
-      }
-    }
-    return true;
-  }
-
-  // 空きマス数のカウント
-  function getEmptyCount() {
-    return board.flat().filter(v => v === 0).length;
-  }
-
-  // UI・アロケーションステータスの更新
-  function updateUI() {
-    const empty = getEmptyCount();
-    document.getElementById('empty-count').innerText = empty;
-    document.getElementById('current-player').innerText = currentPlayer === 1 ? "先手 (白)" : "後手 (黒)";
-    document.getElementById('current-player').style.color = currentPlayer === 1 ? "#fff" : "#ff0055";
-    document.getElementById('score-p1').innerText = scores[1];
-    document.getElementById('score-p2').innerText = scores[2];
-    document.getElementById('wall-p1').innerText = wallsLeft[1];
-    document.getElementById('wall-p2').innerText = wallsLeft[2];
-
-    // 全体ロック判定
-    if (empty <= 15) {
-      document.getElementById('slide-lock-status').innerText = "完全ロック(終盤フェーズ)";
-      document.getElementById('slide-lock-status').style.color = "#ff0055";
-      document.getElementById('countdown').innerText = "SLIDE LOCKED";
-    } else {
-      document.getElementById('slide-lock-status').innerText = "スライド稼働中";
-      document.getElementById('slide-lock-status').style.color = "#00ffcc";
-      document.getElementById('countdown').innerText = `ロックまであと: ${empty - 15} マス`;
-    }
-
-    // フェーズに応じた操作ガイド
-    const instruction = document.getElementById('phase-instruction');
-    const wallBtn = document.getElementById('btn-declare-wall');
-    
-    if (currentPhase === 'PLACE') {
-      instruction.innerText = wallDeclarationMode ? "【申告】赤石を2ターン後に出現させる空きマスをタップしてください。" : "石を配置する空きマスをタップしてください。";
-      document.getElementById('slide-zone').style.display = 'none';
-      wallBtn.disabled = (wallsLeft[currentPlayer] <= 0);
-      document.getElementById('secret-wall-zone').style.display = 'block';
-    } else {
-      instruction.innerText = forcedSkipSlide ? "9マス目設置による自動ロック完了！スライドスキップを押してください。" : "スライドさせるブロックとラインを選択してください。";
-      document.getElementById('slide-zone').style.display = 'block';
-      document.getElementById('secret-wall-zone').style.display = 'none';
-      renderBlockSelectButtons();
-    }
-  }
-
-  // 盤面クリック時のフロー
-  function handleCellClick(r, c) {
-    if (currentPhase !== 'PLACE') return;
-
-    if (wallDeclarationMode) {
-      // シークレット申告の処理
-      if (board[r][c] !== 0) {
-        writeLog("エラー: すでに稼働中のセルには申告できません。");
-        return;
-      }
-      declarations.push({
-        player: currentPlayer,
-        targetTurn: currentTurn + 2,
-        r: r, c: c
-      });
-      wallsLeft[currentPlayer]--;
-      writeLog(`[申告] プレイヤー${currentPlayer}がターン${currentTurn + 2}の出現予定として座標(${r}, ${c})を登録。`);
-      wallDeclarationMode = false;
-      updateUI();
-      renderBoard();
-      return;
-    }
-
-    // 通常の石の配置処理
-    if (board[r][c] !== 0) return;
-
-    // 自殺手（呼吸点ゼロ＆相手を捕獲できない箇所）の防止ロジック
-    if (!isLegalMove(r, c, currentPlayer)) {
-      writeLog("無効アロケーション: 呼吸点がゼロになるため、そこには配置できません。");
-      return;
-    }
-
-    // 9マス目が埋まりつつあるかの事前チェック
-    const blockIdx = Math.floor(r / 3) * 3 + Math.floor(c / 3);
-    const wasFull = isBlockFull(blockIdx);
-
-    // 資産配置実行
-    board[r][c] = currentPlayer;
-    writeLog(`[配置] プレイヤー${currentPlayer}が (${r}, ${c}) に石をデポジット。`);
-
-    // 9マス目配置時のスライド特例判定
-    const isNowFull = isBlockFull(blockIdx);
-    if (!wasFull && isNowFull) {
-      forcedSkipSlide = true;
-      writeLog(`[ロック完了] ブロック${blockIdx+1}が完成。このターンのスライドはロック完了扱いで消化されます。`);
-    } else {
-      forcedSkipSlide = false;
-    }
-
-    // 捕獲判定
-    resolveCaptures(currentPlayer);
-
-    // ターン履歴をセーブ
-    saveHistory();
-
-    // フェーズをスライドへ移行
-    const empty = getEmptyCount();
-    if (empty <= 15) {
-      // 終盤フェーズにつき、スライドフェーズを強制パス
-      writeLog("[システム警告] 空きマス15個以下。スライド機能は完全ロックされています。");
-      endTurn();
-    } else {
-      currentPhase = 'SLIDE';
-      updateUI();
-      renderBoard();
-    }
-  }
-
-  // 呼吸点の計算および石のパージ（捕獲）処理
-  function resolveCaptures(lastPlayer) {
-    let visited = Array(9).fill(null).map(() => Array(9).fill(false));
-    let capturedGroups = [];
-
-    for (let r = 0; r < 9; r++) {
-      for (let c = 0; c < 9; c++) {
-        if (visited[r][c]) continue;
-        const val = board[r][c];
-        
-        // 呼吸点計算の対象（白1, 黒2, 青4。 赤石3は絶対障壁のため対象外）
-        if (val === 1 || val === 2 || val === 4) {
-          let group = [];
-          let liberties = new Set();
-          let queue = [[r, c]];
-          visited[r][c] = true;
-
-          while (queue.length > 0) {
-            let [currR, currC] = queue.shift();
-            group.push([currR, currC]);
-
-            let neighbors = [
-              [currR - 1, currC], [currR + 1, currC],
-              [currR, currC - 1], [currR, currC + 1]
-            ];
-
-            for (let [nr, nc] of neighbors) {
-              if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
-                if (board[nr][nc] === 0) {
-                  liberties.add(`${nr},${nc}`);
-                } else if (board[nr][nc] === val && !visited[nr][nc]) {
-                  visited[nr][nc] = true;
-                  queue.push([nr, nc]);
-                }
-              }
-            }
-          }
-
-          // 呼吸点包囲完了
-          if (liberties.size === 0) {
-            capturedGroups.push({ val: val, group: group });
-          }
-        }
-      }
-    }
-
-    // 捕獲された石のパージ＆ポイント計上
-    let capturedAny = false;
-    capturedGroups.forEach(g => {
-      let capturer = 0;
-      let multiplier = g.val === 4 ? 2 : 1; // 青石は利回り2倍
-
-      if (g.val === 1) capturer = 2; // 白が囲まれたら黒の得点
-      if (g.val === 2) capturer = 1; // 黒が囲まれたら白の得点
-      if (g.val === 4) capturer = lastPlayer; // 青石を囲んだらそのターンの主の手柄
-
-      if (capturer > 0) {
-        let pts = g.group.length * multiplier;
-        scores[capturer] += pts;
-        g.group.forEach(([gr, gc]) => {
-          board[gr][gc] = 0; // 盤面から資産回収
-        });
-        writeLog(`[捕獲] プレイヤー${capturer}が ${pts} ポイントの回収に成功！`);
-        capturedAny = true;
+      if (valX === valY && valY === valZ) {
+        if (valX === 'white') p1Score++;
+        if (valX === 'black') p2Score++;
       }
     });
-
-    if (capturedAny) {
-      renderBoard();
-    }
   }
+  scores[1] = p1Score;
+  scores[2] = p2Score;
+}
 
-  // 自殺手チェック
-  function isLegalMove(r, c, player) {
-    board[r][c] = player;
-    
-    // 1. まず相手の石を殺せるか？
-    let visited = Array(9).fill(null).map(() => Array(9).fill(false));
-    let opponent = player === 1 ? 2 : 1;
-    let canCapture = false;
+function isRed(val) {
+  return val === 'red' || val === 'red-p1' || val === 'red-p2';
+}
 
-    for (let tr = 0; tr < 9; tr++) {
-      for (let tc = 0; tc < 9; tc++) {
-        if (board[tr][tc] === opponent || board[tr][tc] === 4) {
-          if (visited[tr][tc]) continue;
-          let group = [];
-          let liberties = new Set();
-          let queue = [[tr, tc]];
-          visited[tr][tc] = true;
-
-          while (queue.length > 0) {
-            let [currR, currC] = queue.shift();
-            group.push([currR, currC]);
-            let neighbors = [[currR-1, currC], [currR+1, currC], [currR, currC-1], [currR, currC+1]];
-            for (let [nr, nc] of neighbors) {
-              if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
-                if (board[nr][nc] === 0) {
-                  liberties.add(`${nr},${nc}`);
-                } else if (board[nr][nc] === board[tr][tc] && !visited[nr][nc]) {
-                  visited[nr][nc] = true;
-                  queue.push([nr, nc]);
-                }
-              }
-            }
-          }
-          if (liberties.size === 0) {
-            canCapture = true;
-            break;
-          }
-        }
-      }
-      if (canCapture) break;
-    }
-
-    // 2. 自分自身のグループの呼吸点はあるか？
-    let myLiberties = new Set();
-    let myVisited = Array(9).fill(null).map(() => Array(9).fill(false));
-    let myQueue = [[r, c]];
-    myVisited[r][c] = true;
-
-    while (myQueue.length > 0) {
-      let [currR, currC] = myQueue.shift();
-      let neighbors = [[currR-1, currC], [currR+1, currC], [currR, currC-1], [currR, currC+1]];
-      for (let [nr, nc] of neighbors) {
-        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
-          if (board[nr][nc] === 0) {
-            myLiberties.add(`${nr},${nc}`);
-          } else if (board[nr][nc] === player && !myVisited[nr][nc]) {
-            myVisited[nr][nc] = true;
-            myQueue.push([nr, nc]);
-          }
-        }
-      }
-    }
-
-    board[r][c] = 0; // 仮置きをロールバック
-    return (canCapture || myLiberties.size > 0);
+// --- タイマー処理 ---
+function resetTimer() {
+  clearInterval(timerInterval);
+  if (isGameOver) {
+    document.getElementById('countdown').textContent = "";
+    return;
   }
+  timeLeft = 30;
+  document.getElementById('countdown').textContent = `残り ${timeLeft}秒`;
+  timerInterval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      handleTimeout();
+    } else {
+      document.getElementById('countdown').textContent = `残り ${timeLeft}秒`;
+    }
+  }, 1000);
+}
 
-  // スライド・UIブロック選択ボタンの展開
-  function renderBlockSelectButtons() {
-    const container = document.getElementById('block-select-buttons');
-    container.innerHTML = '';
+function handleTimeout() {
+  addLog(`時間切れです！`);
+  if (phase === 'place') {
+    // ランダムな空きマスに自動配置
+    let emptyCells = [];
     for (let b = 0; b < 9; b++) {
-      const btn = document.createElement('button');
-      btn.innerText = `B${b+1}`;
-      btn.disabled = isBlockFull(b) || forcedSkipSlide;
-      btn.onclick = () => selectBlock(b);
-      container.appendChild(btn);
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) emptyCells.push({ b, c });
+      }
+    }
+    if (emptyCells.length > 0) {
+      const rand = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+      board[rand.b][rand.c] = currentPlayer === 1 ? 'white' : 'black';
+      addLog(`自動で石を配置しました。`);
+    }
+    // スライドフェーズはスキップして相手に渡す
+    skipSlide();
+  } else {
+    skipSlide();
+  }
+}
+
+// --- シークレット障壁(赤石)の申告 ---
+function toggleWallDeclaration() {
+  if (phase !== 'place' || isGameOver) return;
+  if (walls[currentPlayer] <= 0) {
+    addLog("障壁(赤石)の残数がありません。");
+    return;
+  }
+  secretWallDeclared = !secretWallDeclared;
+  const btn = document.getElementById('btn-declare-wall');
+  if (secretWallDeclared) {
+    btn.textContent = "★赤石申告中 (次タップで配置)";
+    btn.style.background = "linear-gradient(135deg, #ff0055, #ff5500)";
+    btn.style.color = "#fff";
+  } else {
+    btn.textContent = "赤石(絶対障壁)をシークレット申告";
+    btn.style.background = "linear-gradient(135deg, #66fcf1, #45f3ff)";
+    btn.style.color = "#0b0c10";
+  }
+}
+
+// --- 石の配置処理 ---
+function handleCellClick(blockIdx, cellIdx) {
+  if (phase !== 'place' || isGameOver) return;
+  if (board[blockIdx][cellIdx] !== null) return;
+
+  const playerColor = currentPlayer === 1 ? 'white' : 'black';
+
+  if (secretWallDeclared) {
+    // シークレット壁として配置
+    // 配置したプレイヤー側からは赤色に見えるが、相手プレイヤーの画面では自分の色の石に偽装される
+    board[blockIdx][cellIdx] = currentPlayer === 1 ? 'red-p1' : 'red-p2';
+    walls[currentPlayer]--;
+    addLog(`プレイヤー ${currentPlayer === 1 ? '白' : '黒'} が障壁(赤石)をシークレット配置しました。`);
+  } else {
+    board[blockIdx][cellIdx] = playerColor;
+    addLog(`プレイヤー ${currentPlayer === 1 ? '白' : '黒'} が石を配置しました。`);
+  }
+
+  // シークレット申告ボタンの状態を戻す
+  secretWallDeclared = false;
+  const btn = document.getElementById('btn-declare-wall');
+  btn.textContent = "赤石(絶対障壁)をシークレット申告";
+  btn.style.background = "linear-gradient(135deg, #66fcf1, #45f3ff)";
+  btn.style.color = "#0b0c10";
+
+  updateScores();
+  
+  // スライドフェーズへ移行
+  phase = 'slide';
+  selectedBlock = null;
+  render();
+  resetTimer();
+}
+
+// --- ブロック選択処理（スライドフェーズ用） ---
+function handleBlockClick(blockIdx) {
+  if (phase !== 'slide' || isGameOver) return;
+  if (blockIdx === lockedBlock) {
+    addLog(`B${blockIdx + 1} は直前に動かされたためロックされています。`);
+    return;
+  }
+  selectedBlock = blockIdx;
+  render();
+}
+
+// --- スライド実行処理 ---
+function slideBlock(blockIdx, direction) {
+  if (phase !== 'slide' || isGameOver) return;
+  
+  const b = board[blockIdx];
+  const orig = [...b];
+
+  // 3x3ブロック内での1マストーラススライド処理
+  if (direction === 'left') {
+    b[0] = orig[1]; b[1] = orig[2]; b[2] = orig[0];
+    b[3] = orig[4]; b[4] = orig[5]; b[5] = orig[3];
+    b[6] = orig[7]; b[7] = orig[8]; b[8] = orig[6];
+  } else if (direction === 'right') {
+    b[0] = orig[2]; b[1] = orig[0]; b[2] = orig[1];
+    b[3] = orig[5]; b[4] = orig[3]; b[5] = orig[4];
+    b[6] = orig[8]; b[7] = orig[6]; b[8] = orig[7];
+  } else if (direction === 'up') {
+    b[0] = orig[3]; b[3] = orig[6]; b[6] = orig[0];
+    b[1] = orig[4]; b[4] = orig[7]; b[7] = orig[1];
+    b[2] = orig[5]; b[5] = orig[8]; b[8] = orig[2];
+  } else if (direction === 'down') {
+    b[0] = orig[6]; b[3] = orig[0]; b[6] = orig[3];
+    b[1] = orig[7]; b[4] = orig[1]; b[7] = orig[4];
+    b[2] = orig[8]; b[5] = orig[2]; b[8] = orig[5];
+  }
+
+  const dirName = { 'up': '上', 'down': '下', 'left': '左', 'right': '右' }[direction];
+  addLog(`B${blockIdx + 1} ブロックを「${dirName}」にスライドしました。`);
+  
+  lockedBlock = blockIdx; // スライドしたブロックを次の手番ロックする
+  endTurn();
+}
+
+// --- スライドスキップ ---
+function skipSlide() {
+  if (phase !== 'slide' || isGameOver) return;
+  addLog(`スライドをスキップしました。`);
+  lockedBlock = null; // スキップした場合はロックを解除
+  endTurn();
+}
+
+// --- ターン終了・交代処理 ---
+function endTurn() {
+  updateScores();
+
+  // 空きマスのカウント
+  let emptyCount = 0;
+  for (let b = 0; b < 9; b++) {
+    for (let c = 0; c < 9; c++) {
+      if (board[b][c] === null) emptyCount++;
     }
   }
 
-  function selectBlock(blockIdx) {
-    selectedBlockForSlide = blockIdx;
-    document.getElementById('slide-action-subzone').style.display = 'block';
-    writeLog(`ブロック${blockIdx+1}がスライド候補に選定されました。`);
-  }
-
-  function setSlideLine(type, idx) {
-    selectedLineType = type;
-    selectedLineIdx = idx;
-    writeLog(`選択ライン: ${type === 'row' ? '行' : '列'} ${idx+1}`);
-  }
-
-  // スライド実行＆「コウ（同型反復禁止）」の検査
-  function executeSlide(direction) {
-    if (selectedBlockForSlide === null || selectedLineType === null || selectedLineIdx === null) {
-      writeLog("エラー: ラインアロケーションが不完全です。");
-      return;
-    }
-
-    // 仮スライドでシミュレート
-    let nextBoard = JSON.parse(JSON.stringify(board));
-    performSlideLogic(nextBoard, selectedBlockForSlide, selectedLineType, selectedLineIdx, direction);
-
-    // コウ（直前の盤面状態への巻き戻し）判定
-    if (checkKo(nextBoard)) {
-      writeLog("[警告] 巻き戻し同型反復（コウ）が検出されました！スライドは不渡り（却下）となりやす！");
-      return;
-    }
-
-    // 確定・スライド適用
-    board = nextBoard;
-    writeLog(`[スライド] ブロック${selectedBlockForSlide+1}の${selectedLineType === 'row' ? '行' : '列'}${selectedLineIdx+1}がスライドされました。`);
+  // 盤面がすべて埋まった場合はゲーム終了
+  if (emptyCount === 0) {
+    isGameOver = true;
+    clearInterval(timerInterval);
     
-    // スライド後の捕獲処理
-    resolveCaptures(currentPlayer);
-
-    // スライド終了、次のターンへ
-    endTurn();
-  }
-
-  // 1マス循環スライドの内部アルゴリズム
-  function performSlideLogic(tgtBoard, blockIdx, type, lineIdx, dir) {
-    const bi = Math.floor(blockIdx / 3) * 3;
-    const bj = (blockIdx % 3) * 3;
-
-    if (type === 'row') {
-      const r = bi + lineIdx;
-      let temp = [tgtBoard[r][bj], tgtBoard[r][bj+1], tgtBoard[r][bj+2]];
-      if (dir === 'next') { // 右スライド
-        let last = temp.pop();
-        temp.unshift(last);
-      } else { // 左スライド
-        let first = temp.shift();
-        temp.push(first);
-      }
-      tgtBoard[r][bj] = temp[0];
-      tgtBoard[r][bj+1] = temp[1];
-      tgtBoard[r][bj+2] = temp[2];
-    } else {
-      const c = bj + lineIdx;
-      let temp = [tgtBoard[bi][c], tgtBoard[bi+1][c], tgtBoard[bi+2][c]];
-      if (dir === 'next') { // 下スライド
-        let last = temp.pop();
-        temp.unshift(last);
-      } else { // 上スライド
-        let first = temp.shift();
-        temp.push(first);
-      }
-      tgtBoard[bi][c] = temp[0];
-      tgtBoard[bi+1][c] = temp[1];
-      tgtBoard[bi+2][c] = temp[2];
-    }
-  }
-
-  function skipSlide() {
-    writeLog(`[スキップ] プレイヤー${currentPlayer}はスライド権をパスしました。`);
-    endTurn();
-  }
-
-  // ターン終了および赤石のシークレット時限出現判定
-  function endTurn() {
-    currentPlayer = currentPlayer === 1 ? 2 : 1;
-    currentTurn++;
-    currentPhase = 'PLACE';
-    selectedBlockForSlide = null;
-    selectedLineType = null;
-    selectedLineIdx = null;
-    forcedSkipSlide = false;
-    document.getElementById('slide-action-subzone').style.display = 'none';
-
-    // 2ターン前の申告の出現判定（ターン開始時）
-    resolveDeclarations();
-
-    updateUI();
-    renderBoard();
-  }
-
-  function resolveDeclarations() {
-    let remaining = [];
-    declarations.forEach(dec => {
-      if (dec.targetTurn === currentTurn) {
-        // 出現処理
-        if (board[dec.r][dec.c] === 0) {
-          board[dec.r][dec.c] = 3; // 赤石（絶対障壁）設置
-          writeLog(`[出現成功] プレイヤー${dec.player}の赤石が(${dec.r}, ${dec.c})に出現！`);
-        } else {
-          // すでに他石があるため設置は「不渡り」
-          writeLog(`[出現失敗] プレイヤー${dec.player}の赤石設置予定地(${dec.r}, ${dec.c})はすでに塞がれており、不渡りとなりました。`);
+    // ゲーム終了時はすべてのシークレット障壁を通常赤石として全公開する
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === 'red-p1' || board[b][c] === 'red-p2') {
+          board[b][c] = 'red';
         }
-      } else {
-        remaining.push(dec);
       }
-    });
-    declarations = remaining;
-  }
-
-  function toggleWallDeclaration() {
-    if (wallsLeft[currentPlayer] <= 0) {
-      writeLog("エラー: 赤石（絶対障壁）のストックがゼロです。");
-      return;
     }
-    wallDeclarationMode = !wallDeclarationMode;
-    updateUI();
-    renderBoard();
+    updateScores();
+    render();
+
+    let resultMsg = `ゲーム終了！ [白 ${scores[1]}点] vs [黒 ${scores[2]}点] `;
+    if (scores[1] > scores[2]) {
+      resultMsg += "白（先手）の勝利です！";
+    } else if (scores[2] > scores[1]) {
+      resultMsg += "黒（後手）の勝利です！";
+    } else {
+      resultMsg += "引き分けです。";
+    }
+    addLog(resultMsg);
+    alert(resultMsg);
+    return;
   }
 
-  // コウの履歴管理
-  function saveHistory() {
-    boardHistory.push(JSON.stringify(board));
-    if (boardHistory.length > 20) boardHistory.shift();
+  // プレイヤー交代
+  currentPlayer = currentPlayer === 1 ? 2 : 1;
+  phase = 'place';
+  selectedBlock = null;
+  
+  render();
+  resetTimer();
+}
+
+// --- 盤面とUIの同期レンダリング ---
+function render() {
+  const container = document.getElementById('board-container');
+  container.innerHTML = '';
+
+  // 手番の表示更新
+  const curPlayerSpan = document.getElementById('current-player');
+  if (currentPlayer === 1) {
+    curPlayerSpan.textContent = "先手 (白)";
+    curPlayerSpan.style.color = "#ffffff";
+  } else {
+    curPlayerSpan.textContent = "後手 (黒)";
+    curPlayerSpan.style.color = "#888888";
   }
 
-  function checkKo(tempBoard) {
-    if (boardHistory.length === 0) return false;
-    let tempStr = JSON.stringify(tempBoard);
-    return boardHistory[boardHistory.length - 1] === tempStr;
+  // スコア・障壁残数の表示更新
+  document.getElementById('score-p1').textContent = scores[1];
+  document.getElementById('score-p2').textContent = scores[2];
+  document.getElementById('wall-p1').textContent = walls[1];
+  document.getElementById('wall-p2').textContent = walls[2];
+
+  // 空きマス残の表示更新
+  let emptyCount = 0;
+  for (let b = 0; b < 9; b++) {
+    for (let c = 0; c < 9; c++) {
+      if (board[b][c] === null) emptyCount++;
+    }
+  }
+  document.getElementById('empty-count').textContent = emptyCount;
+
+  // スライドロックステータスの更新
+  const lockStatusSpan = document.getElementById('slide-lock-status');
+  if (lockedBlock !== null) {
+    lockStatusSpan.textContent = `B${lockedBlock + 1} ロック中`;
+    lockStatusSpan.style.color = "#ff0055";
+  } else {
+    lockStatusSpan.textContent = "スライド稼働中";
+    lockStatusSpan.style.color = "#66fcf1";
   }
 
-  // ログシステム
-  function writeLog(text) {
-    const p = document.getElementById('log-panel');
-    p.innerHTML += `<div>&gt; ${text}</div>`;
-    p.scrollTop = p.scrollHeight;
+  // 操作パネルの切り替え
+  const instruction = document.getElementById('phase-instruction');
+  const skipZone = document.getElementById('skip-zone');
+  const wallZone = document.getElementById('secret-wall-zone');
+
+  if (isGameOver) {
+    instruction.textContent = "ゲーム終了。";
+    skipZone.style.display = 'none';
+    wallZone.style.display = 'none';
+  } else if (phase === 'place') {
+    instruction.textContent = "石を配置する空きマスをタップしてください。";
+    skipZone.style.display = 'none';
+    wallZone.style.display = 'block';
+    document.getElementById('btn-declare-wall').disabled = (walls[currentPlayer] <= 0);
+  } else {
+    instruction.textContent = "スライドする3x3ブロック自体をタップして選んでください。";
+    skipZone.style.display = 'block';
+    wallZone.style.display = 'none';
   }
 
-  // 初期ロード
-  window.onload = initGame;
+  // 9つの3x3ブロックの生成
+  for (let b = 0; b < 9; b++) {
+    const blockDiv = document.createElement('div');
+    blockDiv.className = 'block';
+
+    if (b === lockedBlock) {
+      blockDiv.classList.add('locked');
+    } else if (phase === 'slide') {
+      blockDiv.classList.add('selectable');
+      blockDiv.onclick = () => handleBlockClick(b);
+    }
+
+    if (phase === 'slide' && b === selectedBlock) {
+      blockDiv.classList.add('selected');
+    }
+
+    // 各ブロック内の9セルの生成
+    for (let c = 0; c < 9; c++) {
+      const cellDiv = document.createElement('div');
+      cellDiv.className = 'cell';
+
+      // 配置フェーズ中の空きセルのみタップ可能にする
+      if (phase === 'place' && board[b][c] === null && !isGameOver) {
+        cellDiv.classList.add('highlight');
+        cellDiv.onclick = (e) => {
+          e.stopPropagation();
+          handleCellClick(b, c);
+        };
+      }
+
+      // 石または障壁の描画
+      const cellVal = board[b][c];
+      if (cellVal !== null) {
+        const stoneDiv = document.createElement('div');
+        let stoneType = '';
+
+        if (cellVal === 'white') {
+          stoneType = 'white';
+        } else if (cellVal === 'black') {
+          stoneType = 'black';
+        } else if (cellVal === 'red') {
+          stoneType = 'red';
+        } else if (cellVal === 'red-p1') {
+          // シークレット障壁(P1): P1のターンまたはゲーム終了時のみ赤、それ以外は白に見える
+          stoneType = (currentPlayer === 1 || isGameOver) ? 'red' : 'white';
+        } else if (cellVal === 'red-p2') {
+          // シークレット障壁(P2): P2のターンまたはゲーム終了時のみ赤、それ以外は黒に見える
+          stoneType = (currentPlayer === 2 || isGameOver) ? 'red' : 'black';
+        }
+
+        stoneDiv.className = `stone ${stoneType}`;
+        cellDiv.appendChild(stoneDiv);
+      }
+
+      blockDiv.appendChild(cellDiv);
+    }
+
+    // 選択されたブロックに直感的なスライド用矢印を動的配置
+    if (phase === 'slide' && b === selectedBlock) {
+      const arrows = [
+        { dir: 'up', label: '↑', class: 'arrow-up' },
+        { dir: 'down', label: '↓', class: 'arrow-down' },
+        { dir: 'left', label: '←', class: 'arrow-left' },
+        { dir: 'right', label: '→', class: 'arrow-right' }
+      ];
+
+      arrows.forEach(arr => {
+        const arrowBtn = document.createElement('div');
+        arrowBtn.className = `arrow-btn ${arr.class}`;
+        arrowBtn.textContent = ArrLabel = arr.label;
+        // イベントのバブリングを防ぎ、ブロック選択解除を防ぐ
+        arrowBtn.onclick = (e) => {
+          e.stopPropagation();
+          slideBlock(b, arr.dir);
+        };
+        blockDiv.appendChild(arrowBtn);
+      });
+    }
+
+    container.appendChild(blockDiv);
+  }
+}
+
+// ページロード時にゲームを開始
+window.onload = initGame;
 </script>
 </body>
 </html>
