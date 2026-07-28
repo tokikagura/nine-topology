@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.8</title>
+<title>Nine Topology v1.9</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -34,7 +34,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v1.8</h1>
+<h1>NINE TOPOLOGY v1.9</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>空きマス残:</b> <span id="empty-count">81</span></span></div>
   <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#000;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -46,7 +46,6 @@
   <div id="secret-wall-zone" style="margin-top:4px;"><button id="btn-declare-wall" onclick="toggleWallDeclaration()">赤石(絶対障壁)をシークレット申告</button></div>
   <div id="skip-zone" style="margin-top:6px; display:none;"><button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">スライドをスキップ</button></div>
   
-  <!-- iPhone対応: ワンタップBot起動・停止＆ダウンロードボタン群 -->
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT】全自動バグチェック開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
@@ -121,6 +120,7 @@
     currentTurnMove = { place: null, slide: null };
   }
 
+  // ブランド毀損防止用の安全なテストアカウント名で .ntpn 出力！
   function downloadNtpnFile() {
     const dateStr = new Date().toISOString().split('T')[0];
     const scores = calculateScores();
@@ -133,8 +133,8 @@
 
     let ntpnContent = `[Game "Nine Topology"]\n`;
     ntpnContent += `[Date "${dateStr}"]\n`;
-    ntpnContent += `[White "[Tokikagura] Player_White.ntai"]\n`;
-    ntpnContent += `[Black "[Vanguard] Player_Black.ntai"]\n`;
+    ntpnContent += `[White "[Tokikagura] Test_Bot_A.ntai"]\n`;
+    ntpnContent += `[Black "[Vanguard] Test_Bot_B.ntai"]\n`;
     ntpnContent += `[Result "${resultStr}"]\n\n`;
 
     if (ntpnMoveHistory.length === 0) {
@@ -155,7 +155,7 @@
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    logMessage("記譜データ (.ntpn) をローカルへ保存完了！");
+    logMessage("対戦記譜 (.ntpn) をローカルへ保存完了！");
   }
 
   function calculateScores() {
@@ -466,9 +466,6 @@
     updateStatusPanel();
   }
 
-  // ==========================================
-  // iPhone対応！ BOT自動対局＆バグ検出クラス
-  // ==========================================
   class NineTopologyTestBot {
     constructor(speedMs = 30) {
       this.speedMs = speedMs;
@@ -480,11 +477,11 @@
     start() {
       const btn = document.getElementById('btn-toggle-bot');
       if (btn) {
-        btn.innerText = "【BOT】動作中... (停止)";
+        btn.innerText = "【BOT】テスト対局中... (停止)";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
 
-      logMessage("【BOT起動】iPhone上で高速自動バグ検証テストを開始！");
+      logMessage("【BOT起動】全自動バグ検証テスト対局を開始！");
       this.moveCount = 0;
 
       this.intervalId = setInterval(() => {
@@ -508,14 +505,14 @@
         btn.innerText = "【BOT】全自動バグチェック開始";
         btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
       }
-      logMessage("【BOT停止】検証ループを終了しました。");
+      logMessage("【BOT停止】対局処理を停止しました。");
     }
 
     step() {
       this.moveCount++;
       if (this.moveCount > this.maxMoves) {
         this.stop();
-        logMessage("【安全停止】最大手数(250手)到達のためループ保護停止しました。");
+        logMessage("【安全停止】最大手数到達のため停止しました。");
         return;
       }
 
@@ -543,7 +540,12 @@
         if (validTargets.length === 0) {
           if (emptyCount === 0) {
             this.stop();
-            logMessage("【検証完了】バグなし！全セル完走で正常対局終了！");
+            const scores = calculateScores();
+            let winnerStr = "引き分け";
+            if (scores.whiteScore > scores.blackScore) winnerStr = "先手 (白) の勝利！";
+            else if (scores.blackScore > scores.whiteScore) winnerStr = "後手 (黒) の勝利！";
+
+            logMessage(`【対局完走】${winnerStr} (白: ${scores.whiteScore} - 黒: ${scores.blackScore})`);
             downloadNtpnFile();
             return;
           }
