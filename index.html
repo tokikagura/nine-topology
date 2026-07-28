@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.9</title>
+<title>Nine Topology v1.95</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -22,6 +22,9 @@
   .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
   .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
   .stone.red { background: radial-gradient(circle, #ff0055 30%, #990022 90%); box-shadow: 0 0 10px #ff0055; border-radius: 4px; }
+  .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; border-radius: 50%; }
+  .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; animation: pulse 1.5s infinite alternate; }
+  @keyframes pulse { 0% { opacity: 0.4; } 100% { opacity: 1.0; } }
   .arrow-btn { width: 28px; height: 28px; border-radius: 50%; background: #0b0c10; border: 2px solid #66fcf1; color: #66fcf1; font-weight: bold; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; position: absolute; z-index: 100; box-shadow: 0 0 8px #66fcf1; user-select: none; }
   .arrow-up { top: -14px; left: calc(50% - 14px); }
   .arrow-down { bottom: -14px; left: calc(50% - 14px); }
@@ -34,11 +37,11 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v1.9</h1>
+<h1>NINE TOPOLOGY v1.95</h1>
 <div id="status-panel">
-  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>空きマス残:</b> <span id="empty-count">81</span></span></div>
+  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#000;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
-  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="countdown" style="color:#ff0055;"></span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
@@ -64,8 +67,12 @@
   let setupCount = 0;
   let isWallDeclarationActive = false;
 
+  // v1.95 シーズンパラメータ（青石ドロップ）
+  const SEASON_DROP_TURN = 5;
+  let blueStoneDropped = false;
+
   let ntpnMoveHistory = [];
-  let currentTurnMove = { place: null, slide: null };
+  let currentTurnMove = { place: null, slide: null, event: null };
   let turnNumber = 1;
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
@@ -86,14 +93,18 @@
     setupCount = 0;
     isWallDeclarationActive = false;
 
+    blueStoneDropped = false;
+    // B3 (インデックス2) のセル4 (b2: 中央マス) に青石予約フラグをデポジット
+    board[2][4] = 'blue-reserved';
+
     ntpnMoveHistory = [];
-    currentTurnMove = { place: null, slide: null };
+    currentTurnMove = { place: null, slide: null, event: null };
     turnNumber = 1;
 
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム再起動。シード期アロケーション（準備フェーズ）を開始いたしやす！");
+    logMessage("システム再起動。v1.95 シーズン規定（青石B3予約済）開始！");
     renderBoard();
   }
 
@@ -105,24 +116,49 @@
     logPanel.scrollTop = logPanel.scrollHeight;
   }
 
+  function checkBlueStoneDrop() {
+    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN && gamePhase === 'place') {
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] === 'blue-reserved') {
+            board[b][c] = 'blue';
+            blueStoneDropped = true;
+            const eventMsg = `[EVENT: DROP_BLUE_STONE +B${b+1}-${CELL_NAMES[c]}]`;
+            currentTurnMove.event = eventMsg;
+            logMessage(`【シーズン環境イベント】青石が B${b+1}-${CELL_NAMES[c]} にドロップ降臨いたしました！`);
+            return;
+          }
+        }
+      }
+    }
+  }
+
   function commitTurnMove() {
     if (!currentTurnMove.place) return;
 
     const pSide = currentPlayer === 'white' ? 'W' : 'B';
     const placeStr = `${pSide}${currentTurnMove.place}`;
     const slideStr = currentTurnMove.slide ? `${pSide}${currentTurnMove.slide}` : `${pSide}>PASS`;
+    const eventPrefix = currentTurnMove.event ? `${currentTurnMove.event} ` : '';
 
-    const fullMoveStr = `${placeStr} / ${slideStr}`;
+    const fullMoveStr = `${eventPrefix}${placeStr} / ${slideStr}`;
     ntpnMoveHistory.push(`${turnNumber}. ${fullMoveStr}`);
 
     logMessage(`[記譜] ${turnNumber}. ${fullMoveStr}`);
     turnNumber++;
-    currentTurnMove = { place: null, slide: null };
+    currentTurnMove = { place: null, slide: null, event: null };
   }
 
-  // ブランド毀損防止用の安全なテストアカウント名で .ntpn 出力！
+  // 秒単位タイムスタンプで重複を完璧にパージするDLプロトコル！
   function downloadNtpnFile() {
-    const dateStr = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = [
+      String(now.getHours()).padStart(2, '0'),
+      String(now.getMinutes()).padStart(2, '0'),
+      String(now.getSeconds()).padStart(2, '0')
+    ].join('');
+
     const scores = calculateScores();
     let resultStr = "IN_PROGRESS";
     if (emptyCount === 0 || gamePhase === 'gameover') {
@@ -149,13 +185,13 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_${dateStr}_NineTopology_Game.ntpn`;
+    a.download = `NTPN_${dateStr.replace(/-/g, '')}_${timeStr}_NineTopology.ntpn`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    logMessage("対戦記譜 (.ntpn) をローカルへ保存完了！");
+    logMessage(`対戦記譜 (NTPN_${timeStr}) をローカルへ保存完了！`);
   }
 
   function calculateScores() {
@@ -200,6 +236,7 @@
 
     document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)';
     document.getElementById('current-player').style.color = currentPlayer === 'white' ? '#ffffff' : '#888888';
+    document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = scores.whiteScore;
     document.getElementById('score-p2').innerText = scores.blackScore;
@@ -209,6 +246,15 @@
     const lockStatusEl = document.getElementById('slide-lock-status');
     const instructionEl = document.getElementById('phase-instruction');
     const skipZone = document.getElementById('skip-zone');
+    const seasonInfoEl = document.getElementById('season-info');
+
+    if (blueStoneDropped) {
+      seasonInfoEl.innerText = "青石: 盤面降臨済";
+      seasonInfoEl.style.color = "#00d2ff";
+    } else {
+      seasonInfoEl.innerText = `青石: ${SEASON_DROP_TURN}T目降臨予定`;
+      seasonInfoEl.style.color = "#ff9900";
+    }
 
     if (gamePhase === 'setup') {
       lockStatusEl.innerText = "準備フェーズ";
@@ -258,7 +304,7 @@
   }
 
   function isValidPlaceTarget(b, c) {
-    if (board[b][c] !== null) return false;
+    if (board[b][c] !== null) return false; // blue-reservedのマスもnullではないため配置禁止（不渡りパージ！）
 
     if (gamePhase === 'setup') {
       if (!CORNER_BLOCKS.includes(b)) return false;
@@ -275,7 +321,7 @@
   function handleCellClick(b, c) {
     if (gamePhase === 'setup') {
       if (!isValidPlaceTarget(b, c)) {
-        logMessage("エラー: 四隅アセットの重複制限、または不正なデポジット先でやんす仕様！");
+        logMessage("エラー: 四隅制限、または青石予約マスへの不渡り配置でやんす！");
         return;
       }
 
@@ -286,14 +332,20 @@
       setupCount++;
       if (setupCount === 4) {
         gamePhase = 'place';
-        logMessage("準備フェーズ完了！ 通常のアクション（配置＆スライド）を開始しやす！");
+        logMessage("準備フェーズ完了！ 通常のアクションを開始いたしやす！");
+        checkBlueStoneDrop(); // 1ターン目配置前の青石チェック
       }
 
       currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
       renderBoard();
 
     } else if (gamePhase === 'place') {
-      if (!isValidPlaceTarget(b, c)) return;
+      if (!isValidPlaceTarget(b, c)) {
+        if (board[b][c] === 'blue-reserved') {
+          logMessage("不渡りエラー: 青石の着地予定地（予約マス）には石を配置できません！");
+        }
+        return;
+      }
 
       const cellCoord = CELL_NAMES[c];
       if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
@@ -317,6 +369,7 @@
 
         currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
         gamePhase = 'place';
+        checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
       } else {
         gamePhase = 'slide';
       }
@@ -345,25 +398,25 @@
       let temp1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = temp1;
       let temp2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = temp2;
       currentTurnMove.slide = `>B${b+1}-R`;
-      logMessage(`B${b + 1}内のマスを右へトーラス循環スライド完了！`);
+      logMessage(`B${b + 1}内のマスを右へスライド完了！`);
     } else if (direction === 'left') {
       let temp0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = temp0;
       let temp1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = temp1;
       let temp2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = temp2;
       currentTurnMove.slide = `>B${b+1}-L`;
-      logMessage(`B${b + 1}内のマスを左へトーラス循環スライド完了！`);
+      logMessage(`B${b + 1}内のマスを左へスライド完了！`);
     } else if (direction === 'down') {
       let temp0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = temp0;
       let temp1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = temp1;
       let temp2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = temp2;
       currentTurnMove.slide = `>B${b+1}-D`;
-      logMessage(`B${b + 1}内のマスを下へトーラス循環スライド完了！`);
+      logMessage(`B${b + 1}内のマスを下へスライド完了！`);
     } else if (direction === 'up') {
       let temp0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = temp0;
       let temp1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = temp1;
       let temp2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = temp2;
       currentTurnMove.slide = `>B${b+1}-U`;
-      logMessage(`B${b + 1}内のマスを上へトーラス循環スライド完了！`);
+      logMessage(`B${b + 1}内のマスを上へスライド完了！`);
     }
 
     commitTurnMove();
@@ -372,12 +425,13 @@
 
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
+    checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
     renderBoard();
   }
 
   function skipSlide() {
     if (gamePhase !== 'slide') return;
-    logMessage(`${currentPlayer === 'white' ? '白' : '黒'}はリバランス(スライド)をスキップ！`);
+    logMessage(`${currentPlayer === 'white' ? '白' : '黒'}はスライドをスキップ！`);
 
     currentTurnMove.slide = null;
     commitTurnMove();
@@ -386,6 +440,7 @@
     selectedBlock = null;
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
+    checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
     renderBoard();
   }
 
@@ -481,7 +536,7 @@
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
 
-      logMessage("【BOT起動】全自動バグ検証テスト対局を開始！");
+      logMessage("【BOT起動】v1.95 全自動バグ検証テスト対局を開始！");
       this.moveCount = 0;
 
       this.intervalId = setInterval(() => {
