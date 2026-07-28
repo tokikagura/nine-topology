@@ -40,7 +40,7 @@
 <h1>NINE TOPOLOGY v1.95</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
-  <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#000;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
+  <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
@@ -67,7 +67,6 @@
   let setupCount = 0;
   let isWallDeclarationActive = false;
 
-  // v1.95 シーズンパラメータ（青石ドロップ）
   const SEASON_DROP_TURN = 5;
   let blueStoneDropped = false;
 
@@ -94,7 +93,6 @@
     isWallDeclarationActive = false;
 
     blueStoneDropped = false;
-    // B3 (インデックス2) のセル4 (b2: 中央マス) に青石予約フラグをデポジット
     board[2][4] = 'blue-reserved';
 
     ntpnMoveHistory = [];
@@ -104,7 +102,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム再起動。v1.95 シーズン規定（青石B3予約済）開始！");
+    logMessage("システム再起動。v1.95 シーズン規定（視認性＆赤石AI改修済）開始！");
     renderBoard();
   }
 
@@ -149,7 +147,6 @@
     currentTurnMove = { place: null, slide: null, event: null };
   }
 
-  // 秒単位タイムスタンプで重複を完璧にパージするDLプロトコル！
   function downloadNtpnFile() {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
@@ -239,7 +236,12 @@
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = scores.whiteScore;
-    document.getElementById('score-p2').innerText = scores.blackScore;
+
+    // 【修正】黒ポイントの文字色を鮮明なライトグレー(#a3bac3)へ変更！
+    const scoreP2 = document.getElementById('score-p2');
+    scoreP2.innerText = scores.blackScore;
+    scoreP2.style.color = "#a3bac3";
+
     document.getElementById('wall-p1').innerText = wallCount.white;
     document.getElementById('wall-p2').innerText = wallCount.black;
 
@@ -304,7 +306,7 @@
   }
 
   function isValidPlaceTarget(b, c) {
-    if (board[b][c] !== null) return false; // blue-reservedのマスもnullではないため配置禁止（不渡りパージ！）
+    if (board[b][c] !== null) return false;
 
     if (gamePhase === 'setup') {
       if (!CORNER_BLOCKS.includes(b)) return false;
@@ -333,7 +335,7 @@
       if (setupCount === 4) {
         gamePhase = 'place';
         logMessage("準備フェーズ完了！ 通常のアクションを開始いたしやす！");
-        checkBlueStoneDrop(); // 1ターン目配置前の青石チェック
+        checkBlueStoneDrop();
       }
 
       currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
@@ -369,7 +371,7 @@
 
         currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
         gamePhase = 'place';
-        checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
+        checkBlueStoneDrop();
       } else {
         gamePhase = 'slide';
       }
@@ -425,7 +427,7 @@
 
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
-    checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
+    checkBlueStoneDrop();
     renderBoard();
   }
 
@@ -440,7 +442,7 @@
     selectedBlock = null;
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
-    checkBlueStoneDrop(); // 次ターン冒頭の青石降臨チェック
+    checkBlueStoneDrop();
     renderBoard();
   }
 
@@ -585,6 +587,11 @@
       }
 
       if (gamePhase === 'place') {
+        // 【修正】Botが15%の確率で赤石（絶対障壁）をシークレット申告して配置！
+        if (wallCount[currentPlayer] > 0 && Math.random() < 0.15 && !isWallDeclarationActive) {
+          toggleWallDeclaration();
+        }
+
         const validTargets = [];
         for (let b = 0; b < 9; b++) {
           for (let c = 0; c < 9; c++) {
