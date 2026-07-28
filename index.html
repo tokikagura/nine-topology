@@ -45,30 +45,31 @@
   <div id="phase-instruction">【準備フェーズ】四隅のブロック(B1, B3, B7, B9)に石を配置してください（各ブロック自色1個まで）</div>
   <div id="secret-wall-zone" style="margin-top:4px;"><button id="btn-declare-wall" onclick="toggleWallDeclaration()">赤石(絶対障壁)をシークレット申告</button></div>
   <div id="skip-zone" style="margin-top:6px; display:none;"><button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">スライドをスキップ</button></div>
-  <!-- v1.8 新規追加: .ntpn 棋譜ダウンロードボタン -->
-  <div id="export-zone" style="margin-top:6px;">
-    <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) をダウンロード</button>
+  
+  <!-- iPhone対応: ワンタップBot起動・停止＆ダウンロードボタン群 -->
+  <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
+    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT】全自動バグチェック開始</button>
+    <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
   </div>
 </div>
 <div id="log-panel"></div>
 
 <script>
-  let board = Array.from({length: 9}, () => Array(9).fill(null)); // 9ブロック×9セル
+  let board = Array.from({length: 9}, () => Array(9).fill(null));
   let emptyCount = 81;
   let wallCount = { white: 3, black: 4 };
-  let slideLockedBlocks = []; // 不渡り防止（直前スライド制限）ブロック
-  let selectedBlock = null;   // リバランス選択中のブロック
-  let currentPlayer = 'white'; // 'white' or 'black'
-  let gamePhase = 'setup'; // 'setup'（準備）, 'place'（通常配置）, 'slide'（スライド）
-  let setupCount = 0; // シード期アロケーション（準備配置）カウンター
-  let isWallDeclarationActive = false; // 赤石デポジット申告
+  let slideLockedBlocks = [];
+  let selectedBlock = null;
+  let currentPlayer = 'white';
+  let gamePhase = 'setup';
+  let setupCount = 0;
+  let isWallDeclarationActive = false;
 
-  // v1.8 記譜 (.ntpn) 記録用インフラ
   let ntpnMoveHistory = [];
   let currentTurnMove = { place: null, slide: null };
   let turnNumber = 1;
 
-  const CORNER_BLOCKS = [0, 2, 6, 8]; // B1, B3, B7, B9
+  const CORNER_BLOCKS = [0, 2, 6, 8];
   const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
 
   window.onload = function() {
@@ -86,7 +87,6 @@
     setupCount = 0;
     isWallDeclarationActive = false;
 
-    // .ntpn 記譜データの初期化
     ntpnMoveHistory = [];
     currentTurnMove = { place: null, slide: null };
     turnNumber = 1;
@@ -106,7 +106,6 @@
     logPanel.scrollTop = logPanel.scrollHeight;
   }
 
-  // 1手番の動作（配置＋スライド）を .ntpn 形式に整形してスタック
   function commitTurnMove() {
     if (!currentTurnMove.place) return;
 
@@ -117,12 +116,11 @@
     const fullMoveStr = `${placeStr} / ${slideStr}`;
     ntpnMoveHistory.push(`${turnNumber}. ${fullMoveStr}`);
 
-    logMessage(`[記譜記録] ${turnNumber}. ${fullMoveStr}`);
+    logMessage(`[記譜] ${turnNumber}. ${fullMoveStr}`);
     turnNumber++;
     currentTurnMove = { place: null, slide: null };
   }
 
-  // 記譜 (.ntpn) ファイルの動的生成＆ダウンロード実行処理
   function downloadNtpnFile() {
     const dateStr = new Date().toISOString().split('T')[0];
     const scores = calculateScores();
@@ -157,17 +155,16 @@
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    logMessage("記譜データ (.ntpn) をローカルへ安全にデポジット書き出し完了！");
+    logMessage("記譜データ (.ntpn) をローカルへ保存完了！");
   }
 
   function calculateScores() {
     let whiteScore = 0;
     let blackScore = 0;
-
     const lines = [
-      [0,1,2], [3,4,5], [6,7,8], // 横
-      [0,3,6], [1,4,7], [2,5,8], // 縦
-      [0,4,8], [2,4,6]           // 斜め
+      [0,1,2], [3,4,5], [6,7,8],
+      [0,3,6], [1,4,7], [2,5,8],
+      [0,4,8], [2,4,6]
     ];
 
     for (let b = 0; b < 9; b++) {
@@ -227,7 +224,7 @@
       skipZone.style.display = 'none';
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
-      instructionEl.innerText = "【スライドフェーズ】ブロックを選択し、矢印でアセット・リバランス(スライド)するか、スキップしてください。";
+      instructionEl.innerText = "【スライドフェーズ】ブロックを選択し、矢印でスライドするか、スキップしてください。";
       skipZone.style.display = 'block';
     }
 
@@ -315,8 +312,8 @@
       if (emptyCount <= 15) {
         logMessage("市場流動性低下（空きマス15以下）のため、スライド不可。自動ターン交代！");
         slideLockedBlocks = [];
-        currentTurnMove.slide = null; // スライドなし
-        commitTurnMove(); // 記譜コミット
+        currentTurnMove.slide = null;
+        commitTurnMove();
 
         currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
         gamePhase = 'place';
@@ -369,8 +366,7 @@
       logMessage(`B${b + 1}内のマスを上へトーラス循環スライド完了！`);
     }
 
-    commitTurnMove(); // 1手分の配置＆スライドを記譜ログにデポジット
-
+    commitTurnMove();
     slideLockedBlocks = [b];
     selectedBlock = null;
 
@@ -381,10 +377,10 @@
 
   function skipSlide() {
     if (gamePhase !== 'slide') return;
-    logMessage(`${currentPlayer === 'white' ? '白' : '黒'}はリバランス(スライド)をスキップ、現状維持を選択！`);
+    logMessage(`${currentPlayer === 'white' ? '白' : '黒'}はリバランス(スライド)をスキップ！`);
 
-    currentTurnMove.slide = null; // スライドスキップ
-    commitTurnMove(); // 記譜コミット
+    currentTurnMove.slide = null;
+    commitTurnMove();
 
     slideLockedBlocks = [];
     selectedBlock = null;
@@ -422,17 +418,9 @@
       blockEl.className = 'block';
       blockEl.dataset.blockIndex = b;
 
-      if (slideLockedBlocks.includes(b)) {
-        blockEl.classList.add('locked');
-      }
-
-      if (gamePhase === 'slide' && emptyCount > 15 && !slideLockedBlocks.includes(b)) {
-        blockEl.classList.add('selectable');
-      }
-
-      if (selectedBlock === b) {
-        blockEl.classList.add('selected');
-      }
+      if (slideLockedBlocks.includes(b)) blockEl.classList.add('locked');
+      if (gamePhase === 'slide' && emptyCount > 15 && !slideLockedBlocks.includes(b)) blockEl.classList.add('selectable');
+      if (selectedBlock === b) blockEl.classList.add('selected');
 
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
@@ -447,9 +435,7 @@
           cellEl.appendChild(stoneEl);
         } else {
           if (gamePhase === 'setup' || gamePhase === 'place') {
-            if (isValidPlaceTarget(b, c)) {
-              cellEl.classList.add('highlight');
-            }
+            if (isValidPlaceTarget(b, c)) cellEl.classList.add('highlight');
           }
         }
 
@@ -478,6 +464,133 @@
     }
 
     updateStatusPanel();
+  }
+
+  // ==========================================
+  // iPhone対応！ BOT自動対局＆バグ検出クラス
+  // ==========================================
+  class NineTopologyTestBot {
+    constructor(speedMs = 30) {
+      this.speedMs = speedMs;
+      this.intervalId = null;
+      this.moveCount = 0;
+      this.maxMoves = 250;
+    }
+
+    start() {
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【BOT】動作中... (停止)";
+        btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
+      }
+
+      logMessage("【BOT起動】iPhone上で高速自動バグ検証テストを開始！");
+      this.moveCount = 0;
+
+      this.intervalId = setInterval(() => {
+        try {
+          this.step();
+        } catch (error) {
+          this.stop();
+          logMessage(`【バグ検出】: ${error.message}`);
+          alert(`【バグ発生】: ${error.message}`);
+        }
+      }, this.speedMs);
+    }
+
+    stop() {
+      if (this.intervalId) {
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+      }
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【BOT】全自動バグチェック開始";
+        btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
+      }
+      logMessage("【BOT停止】検証ループを終了しました。");
+    }
+
+    step() {
+      this.moveCount++;
+      if (this.moveCount > this.maxMoves) {
+        this.stop();
+        logMessage("【安全停止】最大手数(250手)到達のためループ保護停止しました。");
+        return;
+      }
+
+      if (gamePhase === 'setup') {
+        const validTargets = [];
+        for (let b of CORNER_BLOCKS) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+        if (validTargets.length === 0) throw new Error("準備フェーズで配置可能マスが消滅しました。");
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'place') {
+        const validTargets = [];
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+
+        if (validTargets.length === 0) {
+          if (emptyCount === 0) {
+            this.stop();
+            logMessage("【検証完了】バグなし！全セル完走で正常対局終了！");
+            downloadNtpnFile();
+            return;
+          }
+          throw new Error("空きマスがあるのに配置不能状態が発生しました。");
+        }
+
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'slide') {
+        if (emptyCount <= 15) throw new Error("空き15以下でスライドに突入しました。");
+
+        if (Math.random() < 0.25) {
+          skipSlide();
+          return;
+        }
+
+        const availableBlocks = [];
+        for (let b = 0; b < 9; b++) {
+          if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
+        }
+
+        if (availableBlocks.length === 0) {
+          skipSlide();
+          return;
+        }
+
+        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+        const directions = ['up', 'down', 'left', 'right'];
+        const targetDir = directions[Math.floor(Math.random() * directions.length)];
+
+        executeSlide(targetBlock, targetDir);
+        return;
+      }
+    }
+  }
+
+  const testBot = new NineTopologyTestBot(30);
+
+  function toggleTestBot() {
+    if (testBot.intervalId) {
+      testBot.stop();
+    } else {
+      testBot.start();
+    }
   }
 </script>
 </body>
