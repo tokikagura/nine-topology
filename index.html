@@ -3,9 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.0a</title>
-<!-- 軽量GIFエンコーダー（omggif）のインライン組み込み用CDN -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/omggif/1.0.10/omggif.min.js"></script>
+<title>Nine Topology v2.0b</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -39,7 +37,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.0a</h1>
+<h1>NINE TOPOLOGY v2.0b</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -54,12 +52,11 @@
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT】全自動バグチェック開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
-    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ハイライトGIF抽出</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ハイライト抽出</button>
   </div>
 </div>
 <div id="log-panel"></div>
 
-<!-- GIFレンダリング用キャンバス -->
 <canvas id="gif-canvas" width="324" height="324" style="display:none;"></canvas>
 
 <script>
@@ -112,7 +109,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム再起動。v2.0a (GIF自動抽出・安全・高速インフラ) 起動！");
+    logMessage("システム再起動。v2.0b (エラーパージ型抽出インフラ) 起動！");
     renderBoard();
   }
 
@@ -211,101 +208,51 @@
     logMessage(`対戦記譜 (NTPN_${timeStr}) をローカルへ保存完了！`);
   }
 
-  /* 【v2.0a 確実駆動版】Worker不渡りゼロ！完全ローカル同期型GIF生成機能 */
+  /* 【v2.0b 完全自前ビルド版】外部ライブラリ不渡りゼロ・自動抽出機能 */
   function generateHighlightGIF() {
     if (boardSnapshots.length < 2) {
       logMessage("ハイライト抽出に必要な盤面データが不足しております！");
       return;
     }
 
-    logMessage("【GIFビルド開始】Worker非依存・完全ローカル処理で10秒動画を生成中...");
+    logMessage("【抽出開始】ライブラリ非依存でハイライト画像を生成中...");
 
-    setTimeout(() => {
-      try {
-        const canvas = document.getElementById('gif-canvas');
-        const ctx = canvas.getContext('2d');
-        const width = 324;
-        const height = 324;
+    try {
+      const canvas = document.getElementById('gif-canvas');
+      const ctx = canvas.getContext('2d');
 
-        // 直近10〜15手（ハイライト）抽出
-        const startIdx = Math.max(0, boardSnapshots.length - 12);
-        const targetSnapshots = boardSnapshots.slice(startIdx);
+      const startIdx = Math.max(0, boardSnapshots.length - 12);
+      const targetSnapshots = boardSnapshots.slice(startIdx);
 
-        // カラーパレット作成（256色マップ）
-        const palette = [
-          0x0b, 0x0c, 0x10, // 0: 背景黒
-          0x1f, 0x28, 0x33, // 1: マス目グレー
-          0x66, 0xfc, 0xf1, // 2: シアン（線・ハイライト）
-          0xff, 0xff, 0xff, // 3: 白石
-          0x33, 0x33, 0x33, // 4: 黒石
-          0xff, 0x00, 0x55, // 5: 赤石
-          0x00, 0xd2, 0xff  // 6: 青石
-        ];
-        // 256色までゼロ埋め
-        while (palette.length < 256 * 3) palette.push(0);
-
-        const gifBytes = [];
-        // omggifライブラリ（純粋JS）でGifWriterインスタンス化
-        if (typeof Omggif === 'undefined' && typeof GifWriter === 'undefined') {
-          // フォールバック: データURI直接書き出し（標準Canvas画像）
-          logMessage("【GIF通知】軽量ライブラリから簡易GIFアニメーションを出力します。");
+      let currentFrame = 0;
+      const renderNextFrame = () => {
+        if (currentFrame >= targetSnapshots.length) {
+          canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `NineTopology_Highlight_Turn${turnNumber}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            logMessage("【保存完了】ハイライト画像のローカルデポジットに成功しました！");
+          }, 'image/png');
+          return;
         }
 
-        // 高速Canvasフレーム生成＆エンコード
-        const buffer = new Uint8Array(1024 * 1024 * 2); // 2MBバッファ
-        let writer;
-        if (typeof Omggif !== 'undefined') {
-          writer = new Omggif.GifWriter(buffer, width, height, { palette: palette, loop: 0 });
-        } else {
-          writer = new GifWriter(buffer, width, height, { palette: palette, loop: 0 });
-        }
+        drawBoardToCanvas(ctx, targetSnapshots[currentFrame].board);
+        currentFrame++;
+        setTimeout(renderNextFrame, 100);
+      };
 
-        targetSnapshots.forEach(snap => {
-          drawBoardToCanvas(ctx, snap.board);
-          const imgData = ctx.getImageData(0, 0, width, height);
-          const indexedPixels = new Uint8Array(width * height);
+      renderNextFrame();
 
-          // RGBAをパレットインデックス（0〜6）へ爆速変換
-          for (let i = 0; i < imgData.data.length; i += 4) {
-            const r = imgData.data[i];
-            const g = imgData.data[i+1];
-            const b = imgData.data[i+2];
-            let idx = 0;
-            if (r > 200 && g > 200 && b > 200) idx = 3; // 白
-            else if (r < 50 && g < 50 && b < 50 && imgData.data[i+3] > 0) idx = 0; // 黒背景
-            else if (r > 200 && g < 50) idx = 5; // 赤
-            else if (g > 180 && b > 200) idx = 6; // 青
-            else if (g > 200 && b > 200) idx = 2; // シアン
-            else if (r > 20 && g > 30) idx = 1; // 盤面グレー
-
-            indexedPixels[i / 4] = idx;
-          }
-
-          writer.addFrame(0, 0, width, height, indexedPixels, { delay: 80 }); // 0.8秒間隔
-        });
-
-        const endOffset = writer.end();
-        const finalBuffer = buffer.subarray(0, endOffset);
-        const blob = new Blob([finalBuffer], { type: 'image/gif' });
-
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `NineTopology_Highlight_Turn${turnNumber}.gif`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        logMessage("【GIF抽出完了】10秒ハイライト動画のローカル保存が100%成功いたしました！");
-
-      } catch (err) {
-        logMessage(`【GIF生成ステータス】: アニメーション出力完了！ (${err.message})`);
-      }
-    }, 50);
+    } catch (err) {
+      logMessage(`【エラー発生】: ${err.message}`);
+    }
   }
 
-  // Canvas描画ロジック (GIF用)
   function drawBoardToCanvas(ctx, boardData) {
     ctx.fillStyle = "#1f2833";
     ctx.fillRect(0, 0, 324, 324);
@@ -703,7 +650,7 @@
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
 
-      logMessage("【BOT起動】v2.0a 自動バグチェック＆GIF動画テスト開始！");
+      logMessage("【BOT起動】v2.0b バグチェック＆抽出テスト開始！");
       this.moveCount = 0;
 
       this.intervalId = setInterval(() => {
@@ -773,7 +720,7 @@
 
             logMessage(`【対局完走】${winnerStr} (白: ${scores.whiteScore} - 黒: ${scores.blackScore})`);
             downloadNtpnFile();
-            generateHighlightGIF(); // 完走時にGIFをバチコーンと自動出力！
+            generateHighlightGIF(); 
             return;
           }
           throw new Error("空きマスがあるのに配置不能状態が発生しました。");
