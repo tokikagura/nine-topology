@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.95</title>
+<title>Nine Topology v2.0</title>
+<!-- gif.js ライブラリ (ローカルブラウザでの0円GIF生成用インフラ) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -37,7 +39,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v1.95</h1>
+<h1>NINE TOPOLOGY v2.0</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -52,9 +54,13 @@
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT】全自動バグチェック開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ハイライトGIF抽出</button>
   </div>
 </div>
 <div id="log-panel"></div>
+
+<!-- GIF生成用の非表示キャンバス -->
+<canvas id="gif-canvas" width="324" height="324" style="display:none;"></canvas>
 
 <script>
   let board = Array.from({length: 9}, () => Array(9).fill(null));
@@ -71,6 +77,7 @@
   let blueStoneDropped = false;
 
   let ntpnMoveHistory = [];
+  let boardSnapshots = []; // GIFアニメーション用に各ターンの盤面状態を保存するアセット
   let currentTurnMove = { place: null, slide: null, event: null };
   let turnNumber = 1;
 
@@ -96,14 +103,25 @@
     board[2][4] = 'blue-reserved';
 
     ntpnMoveHistory = [];
+    boardSnapshots = [];
+    saveBoardSnapshot(); // 初期盤面のキャプチャ
+
     currentTurnMove = { place: null, slide: null, event: null };
     turnNumber = 1;
 
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム再起動。v1.95 シーズン規定（視認性＆赤石AI改修済）開始！");
+    logMessage("システム再起動。v2.0 確定仕様（10秒GIFハイライト機能搭載）スタート！");
     renderBoard();
+  }
+
+  function saveBoardSnapshot() {
+    const copy = board.map(arr => [...arr]);
+    boardSnapshots.push({
+      turn: turnNumber,
+      board: copy
+    });
   }
 
   function logMessage(msg) {
@@ -143,6 +161,8 @@
     ntpnMoveHistory.push(`${turnNumber}. ${fullMoveStr}`);
 
     logMessage(`[記譜] ${turnNumber}. ${fullMoveStr}`);
+    saveBoardSnapshot(); // ターン毎に盤面スナップショット保存
+
     turnNumber++;
     currentTurnMove = { place: null, slide: null, event: null };
   }
@@ -191,6 +211,113 @@
     logMessage(`対戦記譜 (NTPN_${timeStr}) をローカルへ保存完了！`);
   }
 
+  /* 【新規機能】0円インフラ・10秒ハイライトGIF自動抽出機能 */
+  function generateHighlightGIF() {
+    if (boardSnapshots.length < 2) {
+      logMessage("ハイライト抽出に必要な盤面データが不足しております！");
+      return;
+    }
+
+    logMessage("【GIFエンコード開始】名場面の10秒ハイライト動画をビルド中...");
+
+    const canvas = document.getElementById('gif-canvas');
+    const ctx = canvas.getContext('2d');
+
+    // GIFエンコーダー初期化 (gif.js)
+    const gif = new GIF({
+      workers: 2,
+      quality: 10,
+      width: 324,
+      height: 324,
+      workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+    });
+
+    // 直近10〜15手（ハイライトシーン）を抽出
+    const startIdx = Math.max(0, boardSnapshots.length - 12);
+    const targetSnapshots = boardSnapshots.slice(startIdx);
+
+    targetSnapshots.forEach(snap => {
+      drawBoardToCanvas(ctx, snap.board);
+      gif.addFrame(ctx, {copy: true, delay: 800}); // 1フレーム0.8秒で再生
+    });
+
+    gif.on('finished', function(blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `NineTopology_Highlight_Turn${turnNumber}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      logMessage("【GIF出力完了】10秒ハイライトGIFアニメーションを保存しましたッ！");
+    });
+
+    gif.render();
+  }
+
+  // Canvas描画ロジック (GIF用)
+  function drawBoardToCanvas(ctx, boardData) {
+    ctx.fillStyle = "#1f2833";
+    ctx.fillRect(0, 0, 324, 324);
+    ctx.strokeStyle = "#66fcf1";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(0, 0, 324, 324);
+
+    const blockSize = 104;
+    const gap = 4;
+
+    for (let b = 0; b < 9; b++) {
+      const bx = (b % 3) * (blockSize + gap) + gap;
+      const by = Math.floor(b / 3) * (blockSize + gap) + gap;
+
+      ctx.fillStyle = "#0b0c10";
+      ctx.fillRect(bx, by, blockSize, blockSize);
+
+      const cellSize = 32;
+      const cellGap = 1;
+
+      for (let c = 0; c < 9; c++) {
+        const cx = bx + (c % 3) * (cellSize + cellGap) + cellGap;
+        const cy = by + Math.floor(c / 3) * (cellSize + cellGap) + cellGap;
+
+        ctx.fillStyle = "#1f2833";
+        ctx.fillRect(cx, cy, cellSize, cellSize);
+
+        const stone = boardData[b][c];
+        if (stone) {
+          ctx.beginPath();
+          ctx.arc(cx + 16, cy + 16, 13, 0, Math.PI * 2);
+          if (stone === 'white') {
+            ctx.fillStyle = "#ffffff";
+            ctx.shadowColor = "#ffffff";
+            ctx.shadowBlur = 4;
+          } else if (stone === 'black') {
+            ctx.fillStyle = "#333333";
+            ctx.shadowColor = "#000000";
+            ctx.shadowBlur = 4;
+          } else if (stone === 'red') {
+            ctx.fillStyle = "#ff0055";
+            ctx.shadowColor = "#ff0055";
+            ctx.shadowBlur = 6;
+          } else if (stone === 'blue') {
+            ctx.fillStyle = "#00d2ff";
+            ctx.shadowColor = "#00d2ff";
+            ctx.shadowBlur = 6;
+          } else if (stone === 'blue-reserved') {
+            ctx.strokeStyle = "#00d2ff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            continue;
+          }
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+    }
+  }
+
   function calculateScores() {
     let whiteScore = 0;
     let blackScore = 0;
@@ -237,7 +364,6 @@
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = scores.whiteScore;
 
-    // 【修正】黒ポイントの文字色を鮮明なライトグレー(#a3bac3)へ変更！
     const scoreP2 = document.getElementById('score-p2');
     scoreP2.innerText = scores.blackScore;
     scoreP2.style.color = "#a3bac3";
@@ -538,7 +664,7 @@
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
 
-      logMessage("【BOT起動】v1.95 全自動バグ検証テスト対局を開始！");
+      logMessage("【BOT起動】v2.0 全自動バグ検証＆ハイライト生成テスト開始！");
       this.moveCount = 0;
 
       this.intervalId = setInterval(() => {
@@ -587,7 +713,6 @@
       }
 
       if (gamePhase === 'place') {
-        // 【修正】Botが15%の確率で赤石（絶対障壁）をシークレット申告して配置！
         if (wallCount[currentPlayer] > 0 && Math.random() < 0.15 && !isWallDeclarationActive) {
           toggleWallDeclaration();
         }
@@ -609,6 +734,7 @@
 
             logMessage(`【対局完走】${winnerStr} (白: ${scores.whiteScore} - 黒: ${scores.blackScore})`);
             downloadNtpnFile();
+            generateHighlightGIF(); // 対局完走時に自動でGIF抽出を開始！
             return;
           }
           throw new Error("空きマスがあるのに配置不能状態が発生しました。");
