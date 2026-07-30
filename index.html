@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.4a (BOT vs Grok)</title>
+<title>Nine Topology v2.4b (BOT vs Grok v3)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,17 +27,17 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.4a (BOT vs Grok)</h1>
+<h1>NINE TOPOLOGY v2.4b (BOT vs Grok v3)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
-  <div class="flex-row"><span><b>白 (従来BOT):</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 ([xAI] Grok):</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
+  <div class="flex-row"><span><b>白 (従来BOT):</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 ([xAI] Grok v3):</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
-  <div id="phase-instruction">【自動シミュレーション】BOT vs Grok (赤石実装版) の全自動対局モードです</div>
+  <div id="phase-instruction">【自動シミュレーション】BOT vs Grok v3 の全自動対局検証モードです</div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
-    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT vs Grok】全自動対局開始</button>
+    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT vs Grok v3】全自動対局開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
     <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
   </div>
@@ -94,15 +94,30 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.4a (赤石・絶対障壁組み込み済) 全自動対局準備完了。");
+    logMessage("システム起動 v2.4b (Grok v3 思考エンジン接続) 準備完了。");
     renderBoard();
   }
 
-  /* === Grok提出の評価関数（v2.1構造への適合） === */
-  function evaluateGrokMove(boardData, myColor, seasonInfo) {
+  /* === Grok提出の v3 評価関数（画像から完全再現） === */
+  function evaluateGrokMoveV3(board, myColor, seasonInfo) {
     const { reservedPos: rp, isDropped, bonusMultiplier: mul } = seasonInfo;
     let best = null, max = -1e9;
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++) {
+        if (board[r][c] || (!isDropped && r == rp.b && c == rp.c)) continue;
+        let s = mul * 5 / (1 + Math.abs(r - rp.b) + Math.abs(c - rp.c));
+        let m = 0, bc = (c / 3 | 0) * 3;
+        for (let i = 0; i < 3; i++)
+          if (board[r][bc + i] == myColor) m++;
+        s += m * 3;
+        if (s > max) { max = s; best = { b: r, c: c }; }
+      }
+    return { place: best || { b: 4, c: 4 }, slide: null };
+  }
 
+  /* === Grokの9x9座標解釈を v2.1 の {b, c} データ構造へ適合させるラッパー === */
+  function getGrokV3MoveWrapped(boardData, myColor, seasonInfo) {
+    // Nine Topology の 9x9 グリッド変換
     let grid9x9 = Array.from({length: 9}, () => Array(9).fill(null));
     for (let b = 0; b < 9; b++) {
       for (let c = 0; c < 9; c++) {
@@ -112,24 +127,15 @@
       }
     }
 
-    for (let r = 0; r < 9; r++) {
-      for (let c = 0; c < 9; c++) {
-        if (grid9x9[r][c]) continue;
-        if (!isDropped && r === rp.b && c === rp.c) continue;
+    const res = evaluateGrokMoveV3(grid9x9, myColor, seasonInfo);
+    
+    // Grokが返した {b: row, c: col} から、正しいブロック番号(b)とセル番号(c)へ復元
+    let rawR = res.place.b;
+    let rawC = res.place.c;
+    let targetB = Math.floor(rawR / 3) * 3 + Math.floor(rawC / 3);
+    let targetC = (rawR % 3) * 3 + (rawC % 3);
 
-        let s = mul * 10 / (1 + Math.abs(r - rp.b) + Math.abs(c - rp.c));
-        if (s > max) {
-          max = s;
-          best = { r: r, c: c };
-        }
-      }
-    }
-
-    let target = best || { r: 4, c: 4 };
-    let targetB = Math.floor(target.r / 3) * 3 + Math.floor(target.c / 3);
-    let targetC = (target.r % 3) * 3 + (target.c % 3);
-
-    return { place: { b: targetB, c: targetC }, slide: null };
+    return { place: { b: targetB, c: targetC }, slide: res.slide };
   }
 
   function saveBoardSnapshot() {
@@ -184,14 +190,14 @@
       else resultStr = "1/2-1/2";
     }
 
-    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "[Tokikagura] Test_Bot_A.ntai"]\n[Black "[xAI] Grok.ntai"]\n[Result "${resultStr}"]\n\n`;
+    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "[Tokikagura] Test_Bot_A.ntai"]\n[Black "[xAI] Grok_v3.ntai"]\n[Result "${resultStr}"]\n\n`;
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
 
     const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_vsGrok_NineTopology.ntpn`;
+    a.download = `NTPN_vsGrok_v3_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜をローカルへ保存完了！`);
@@ -215,7 +221,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_vsGrok_Highlight.gif`;
+      a.download = `NineTopology_vsGrok_v3_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
@@ -282,7 +288,7 @@
     const scores = calculateScores();
     emptyCount = countEmptyCells();
 
-    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白/BOT)' : '後手 (黒/Grok)';
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白/BOT)' : '後手 (黒/Grok v3)';
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = scores.whiteScore;
@@ -431,7 +437,7 @@
     updateStatusPanel();
   }
 
-  /* === 赤石対応 全自動シミュレーション BOT エンジン === */
+  /* === 全自動シミュレーション BOT エンジン === */
   class NineTopologyGrokBattleBot {
     constructor(speedMs = 30) {
       this.speedMs = speedMs;
@@ -446,7 +452,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】白(従来BOT) vs 黒(Grok) 赤石ありシミュレーション始動！");
+      logMessage("【BOT対局開始】白(従来BOT) vs 黒(Grok v3) 対局検証始動！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
@@ -458,7 +464,7 @@
       if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
       const btn = document.getElementById('btn-toggle-bot');
       if (btn) {
-        btn.innerText = "【BOT vs Grok】全自動対局開始";
+        btn.innerText = "【BOT vs Grok v3】全自動対局開始";
         btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
       }
       logMessage("【対局停止】シミュレーションを停止しました。");
@@ -488,7 +494,6 @@
 
       // 2. 配置フェーズ
       if (gamePhase === 'place') {
-        // ★ 赤石 (絶対障壁) の確率使用判定 (残高があり、15%の確率で発動)
         if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
           isWallDeclarationActive = true;
         } else {
@@ -498,19 +503,19 @@
         let choice = null;
 
         if (currentPlayer === 'black') {
-          // 黒（Grok AI）の着手判断
+          // 黒（Grok v3）の着手判断
           const seasonInfo = {
-            reservedPos: { b: 2, c: 4 }, // B3-b2
+            reservedPos: { b: 2, c: 4 }, // B3-b2 (row 2, col 4)
             isDropped: blueStoneDropped,
             bonusMultiplier: 2.0
           };
-          const res = evaluateGrokMove(board, 'black', seasonInfo);
+          const res = getGrokV3MoveWrapped(board, 'black', seasonInfo);
           if (isValidPlaceTarget(res.place.b, res.place.c)) {
             choice = res.place;
           }
         }
 
-        // 白（従来BOT）またはGrokの推奨マスが埋まっていた場合のランダム着手フォールバック
+        // 白（従来BOT）またはGrokの選択不可時のフォールバック
         if (!choice) {
           const validTargets = [];
           for (let b = 0; b < 9; b++) {
@@ -525,7 +530,7 @@
               const scores = calculateScores();
               let result = "引き分け";
               if (scores.whiteScore > scores.blackScore) result = "先手 (白/従来BOT) の勝利！";
-              else if (scores.blackScore > scores.whiteScore) result = "後手 (黒/Grok) の勝利！";
+              else if (scores.blackScore > scores.whiteScore) result = "後手 (黒/Grok v3) の勝利！";
 
               logMessage(`【対局決着】${result} (白:${scores.whiteScore} - 黒Grok:${scores.blackScore})`);
               return;
@@ -543,6 +548,13 @@
       if (gamePhase === 'slide') {
         if (emptyCount <= 15) throw new Error("空き15以下スライドエラー");
 
+        // Grok v3 は slide: null（パス推奨）のため黒番のときは基本パス
+        if (currentPlayer === 'black') {
+          skipSlide();
+          return;
+        }
+
+        // 白（従来BOT）はランダムスライド
         if (Math.random() < 0.3) {
           skipSlide();
           return;
