@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology NTAI 対戦ポータル v2.1</title>
+<title>Nine Topology NTAI 対戦ポータル v3.0</title>
 <style>
   body { background: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; }
   h1 { font-size: 1rem; color: #66fcf1; margin: 4px 0; text-align: center; }
@@ -11,24 +11,25 @@
   iframe { width: 100%; height: 100%; border: none; }
   
   #ntai-panel { width: 330px; margin-top: 8px; background: rgba(31, 40, 51, 0.9); padding: 8px; border-radius: 6px; box-sizing: border-box; border: 1px solid #45f3ff; font-size: 0.75rem; }
-  .section-title { font-weight: bold; color: #66fcf1; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+  .section-title { font-weight: bold; color: #66fcf1; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
   
-  /* ファイルドロップ・選択エリア */
-  #file-drop-zone { border: 2px dashed #45f3ff; border-radius: 6px; padding: 10px; text-align: center; background: rgba(0,0,0,0.4); margin-bottom: 6px; cursor: pointer; transition: background 0.2s; }
-  #file-drop-zone.dragover { background: rgba(102, 252, 241, 0.2); }
-  #file-input { display: none; }
+  .ai-slot { border: 1px solid #45f3ff; border-radius: 4px; padding: 6px; margin-bottom: 6px; background: rgba(0,0,0,0.3); }
+  .slot-label { font-weight: bold; font-size: 0.7rem; margin-bottom: 4px; display: block; }
+  .slot-label.white { color: #ffffff; }
+  .slot-label.black { color: #ff0055; }
+
+  textarea { width: 100%; height: 45px; background: #000; color: #66fcf1; border: 1px solid #45f3ff; border-radius: 4px; font-family: monospace; font-size: 0.6rem; box-sizing: border-box; resize: vertical; margin-top: 4px; }
   
-  textarea { width: 100%; height: 60px; background: #000; color: #66fcf1; border: 1px solid #45f3ff; border-radius: 4px; font-family: monospace; font-size: 0.65rem; box-sizing: border-box; resize: vertical; margin-bottom: 4px; }
-  
-  button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; font-weight: bold; padding: 8px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 0.8rem; transition: opacity 0.2s; }
+  button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; font-weight: bold; padding: 8px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 0.8rem; margin-top: 4px; }
   button:active { opacity: 0.8; }
   
-  #loaded-ai-info { margin-top: 6px; padding: 4px; background: #000; border-radius: 4px; color: #00d2ff; font-family: monospace; font-size: 0.7rem; word-break: break-all; }
+  .file-btn { background: #1f2833; color: #66fcf1; border: 1px solid #45f3ff; padding: 4px 8px; border-radius: 4px; font-size: 0.65rem; cursor: pointer; display: inline-block; }
+  #status-info { margin-top: 6px; padding: 4px; background: #000; border-radius: 4px; color: #00d2ff; font-family: monospace; font-size: 0.65rem; word-break: break-all; }
 </style>
 </head>
 <body>
 
-<h1>NTAI シーズン対戦ポータル</h1>
+<h1>NTAI シーズン対戦ポータル v3.0</h1>
 
 <!-- ゲーム本体（index.html）枠 -->
 <div id="iframe-container">
@@ -37,77 +38,61 @@
 
 <!-- 外部AI読み込み制御パネル -->
 <div id="ntai-panel">
-  <div class="section-title"><span>🤖 外部AI (.ntai) の読み込み</span></div>
+  <div class="section-title"><span>🤖 独立AI対戦スロット (.ntai)</span></div>
   
-  <!-- ① ファイル選択/ドラッグ＆ドロップ エリア (accept属性を削除してiOSで選択可能に修正) -->
-  <div id="file-drop-zone" onclick="triggerFileInput()">
-    <span id="drop-zone-text">📁 タップして .ntai ファイルを選択<br><span style="font-size: 0.65rem; color: #a3bac3;">(またはここにファイルをドロップ)</span></span>
-    <input type="file" id="file-input" onchange="handleFileSelect(event)">
+  <!-- ① 先手（白）スロット -->
+  <div class="ai-slot">
+    <span class="slot-label white">⚪ 先手 (White) AI:</span>
+    <label class="file-btn" onclick="triggerInput('file-white')">📁 ファイル選択</label>
+    <input type="file" id="file-white" style="display:none;" onchange="handleFile(event, 'white')">
+    <textarea id="code-white" placeholder="// 先手AIのコードを貼り付け"></textarea>
   </div>
 
-  <!-- ② テキスト直接貼り付け用（補助） -->
-  <textarea id="ai-code-input" placeholder="// またはコードを直接ここに貼り付け"></textarea>
+  <!-- ② 後手（黒）スロット -->
+  <div class="ai-slot">
+    <span class="slot-label black">🔴 後手 (Black) AI:</span>
+    <label class="file-btn" onclick="triggerInput('file-black')">📁 ファイル選択</label>
+    <input type="file" id="file-black" style="display:none;" onchange="handleFile(event, 'black')">
+    <textarea id="code-black" placeholder="// 後手AIのコードを貼り付け"></textarea>
+  </div>
+
+  <button onclick="startDuel()">両AIをセットして対局開始</button>
   
-  <button onclick="injectExternalAI()">外部AIをセットして起動</button>
-  
-  <div id="loaded-ai-info">未読み込み: デフォルト対局モード</div>
+  <div id="status-info">⚪ 未セット | 🔴 未セット</div>
 </div>
 
 <script>
-  let loadedCode = "";
+  let loadedCodeWhite = "";
+  let loadedCodeBlack = "";
 
-  function triggerFileInput() {
-    const fileInput = document.getElementById('file-input');
-    fileInput.value = ''; // 同名ファイルの再選択を許可
-    fileInput.click();
+  function triggerInput(id) {
+    const el = document.getElementById(id);
+    el.value = '';
+    el.click();
   }
 
-  // ドラッグ＆ドロップのイベント制御
-  const dropZone = document.getElementById('file-drop-zone');
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-    dropZone.addEventListener(eventName, preventDefaults, false);
-  });
-
-  function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
-
-  ['dragenter', 'dragover'].forEach(eventName => {
-    dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
-  });
-
-  ['dragleave', 'drop'].forEach(eventName => {
-    dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
-  });
-
-  dropZone.addEventListener('drop', (e) => {
-    const dt = e.dataTransfer;
-    const files = dt.files;
-    if (files.length > 0) readNtaiFile(files[0]);
-  });
-
-  // ファイル選択ダイアログ処理
-  function handleFileSelect(event) {
+  function handleFile(event, side) {
     const file = event.target.files[0];
-    if (file) readNtaiFile(file);
-  }
-
-  // ファイル読み込み処理
-  function readNtaiFile(file) {
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = function(e) {
-      loadedCode = e.target.result;
-      document.getElementById('ai-code-input').value = loadedCode;
-      document.getElementById('drop-zone-text').innerHTML = `✅ 読込準備完了: <b>${file.name}</b>`;
+      if (side === 'white') {
+        loadedCodeWhite = e.target.result;
+        document.getElementById('code-white').value = loadedCodeWhite;
+      } else {
+        loadedCodeBlack = e.target.result;
+        document.getElementById('code-black').value = loadedCodeBlack;
+      }
     };
     reader.readAsText(file);
   }
 
-  // iframe内の index.html へAIコードを注入実行
-  function injectExternalAI() {
-    const textareaCode = document.getElementById('ai-code-input').value;
-    const codeToInject = textareaCode.trim() ? textareaCode : loadedCode;
-    
-    if (!codeToInject.trim()) {
-      alert("⚠️ .ntai ファイルを選択するか、テキストエリアにコードを貼り付けてください。");
+  function startDuel() {
+    const codeW = document.getElementById('code-white').value.trim() || loadedCodeWhite;
+    const codeB = document.getElementById('code-black').value.trim() || loadedCodeBlack;
+
+    if (!codeW && !codeB) {
+      alert("⚠️ 少なくともどちらか一方のAIコードを入力してください。");
       return;
     }
 
@@ -115,39 +100,63 @@
     try {
       const iframeWin = iframe.contentWindow;
 
-      // 既存の対局をリセット（initGameが存在すれば実行）
+      // ゲーム盤面初期化
       if (typeof iframeWin.initGame === 'function') {
         iframeWin.initGame();
       }
 
-      // 古い注入スクリプトがあれば削除
-      const oldScript = iframeWin.document.getElementById('ntai-injected-script');
-      if (oldScript) oldScript.remove();
+      // 古いスクリプトを削除
+      const oldW = iframeWin.document.getElementById('ntai-script-white');
+      const oldB = iframeWin.document.getElementById('ntai-script-black');
+      if (oldW) oldW.remove();
+      if (oldB) oldB.remove();
 
-      // iframe 内に script タグを生成して注入
-      const script = iframeWin.document.createElement('script');
-      script.id = 'ntai-injected-script';
-      script.textContent = codeToInject + `\n
-        if (window.NTAI_Engine) {
-          console.log("NTAI Engine Loaded:", window.NTAI_Engine.name);
-        }
-      `;
-      iframeWin.document.body.appendChild(script);
+      // 先手AIの注入 (window.NTAI_Engine_White に登録)
+      if (codeW) {
+        const scriptW = iframeWin.document.createElement('script');
+        scriptW.id = 'ntai-script-white';
+        scriptW.textContent = `
+          (function(){
+            ${codeW}
+            if (window.NTAI_Engine) {
+              window.NTAI_Engine_White = window.NTAI_Engine;
+              window.NTAI_Engine = null; // グローバル汚染防止
+            }
+          })();
+        `;
+        iframeWin.document.body.appendChild(scriptW);
+      }
 
-      // 読み込み完了情報の表示
+      // 後手AIの注入 (window.NTAI_Engine_Black に登録)
+      if (codeB) {
+        const scriptB = iframeWin.document.createElement('script');
+        scriptB.id = 'ntai-script-black';
+        scriptB.textContent = `
+          (function(){
+            ${codeB}
+            if (window.NTAI_Engine) {
+              window.NTAI_Engine_Black = window.NTAI_Engine;
+              window.NTAI_Engine = null; // グローバル汚染防止
+            }
+          })();
+        `;
+        iframeWin.document.body.appendChild(scriptB);
+      }
+
+      // ステータス表示の更新
       setTimeout(() => {
-        const engine = iframeWin.NTAI_Engine;
-        const infoEl = document.getElementById('loaded-ai-info');
-        if (engine && engine.name) {
-          infoEl.innerHTML = `🟢 読み込み成功: <b>${engine.name}</b> (${engine.author || '不明'})`;
-          alert(`NTAI エントリ完了！\nAI名: ${engine.name}\n開発者: ${engine.author || '名無し'}`);
-        } else {
-          infoEl.innerHTML = `🟡 注入完了 (window.NTAI_Engine 未検出)`;
-        }
+        const engineW = iframeWin.NTAI_Engine_White;
+        const engineB = iframeWin.NTAI_Engine_Black;
+        
+        const nameW = engineW ? engineW.name : 'デフォルト';
+        const nameB = engineB ? engineB.name : 'デフォルト';
+
+        document.getElementById('status-info').innerHTML = `⚪先手: <b>${nameW}</b><br>🔴後手: <b>${nameB}</b>`;
+        alert(`⚔️ 対局スタート！\n⚪ 先手: ${nameW}\n🔴 後手: ${nameB}`);
       }, 100);
 
     } catch (e) {
-      alert("❌ AIコードの注入に失敗しました: " + e.message);
+      alert("❌ AIのセットアップに失敗しました: " + e.message);
     }
   }
 </script>
