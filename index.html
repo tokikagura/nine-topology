@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.3 (vs Grok AI)</title>
+<title>Nine Topology v2.4 (Bot White vs Grok Black)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -12,12 +12,7 @@
   #board-container { position: relative; width: 324px; height: 324px; background: #1f2833; border: 3px solid #66fcf1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px; box-sizing: border-box; border-radius: 6px; overflow: visible; }
   .block { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 1px; background: #0b0c10; border-radius: 2px; position: relative; border: 2px solid transparent; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; overflow: visible; }
   .block.locked { border: 2px solid #ff0055 !important; box-shadow: inset 0 0 8px rgba(255,0,85,0.5); }
-  .block.selectable { cursor: pointer; }
-  .block.selectable:hover { border-color: rgba(102, 252, 241, 0.5); }
-  .block.selected { border: 2px solid #66fcf1 !important; box-shadow: 0 0 12px #66fcf1; z-index: 5; }
   .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; position: relative; height: 32px; width: 32px; }
-  .cell.highlight { background: rgba(102,252,241,0.2); cursor: pointer; }
-  .cell.highlight:hover { background: rgba(102,252,241,0.4); }
   .stone { width: 82%; height: 82%; border-radius: 50%; }
   .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
   .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
@@ -25,11 +20,6 @@
   .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; border-radius: 50%; }
   .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; animation: pulse 1.5s infinite alternate; }
   @keyframes pulse { 0% { opacity: 0.4; } 100% { opacity: 1.0; } }
-  .arrow-btn { width: 28px; height: 28px; border-radius: 50%; background: #0b0c10; border: 2px solid #66fcf1; color: #66fcf1; font-weight: bold; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; position: absolute; z-index: 100; box-shadow: 0 0 8px #66fcf1; user-select: none; }
-  .arrow-up { top: -14px; left: calc(50% - 14px); }
-  .arrow-down { bottom: -14px; left: calc(50% - 14px); }
-  .arrow-left { left: -14px; top: calc(50% - 14px); }
-  .arrow-right { right: -14px; top: calc(50% - 14px); }
   #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
   button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -37,22 +27,19 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.3 (vs Grok AI)</h1>
+<h1>NINE TOPOLOGY v2.4 (BOT vs Grok)</h1>
 <div id="status-panel">
-  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白/あなた)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
-  <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒(Grok):</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
+  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
+  <div class="flex-row"><span><b>白 (従来BOT):</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 ([xAI] Grok):</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
-  <div id="phase-instruction">【準備フェーズ】四隅のブロック(B1, B3, B7, B9)に石を配置してください（各ブロック自色1個まで）</div>
-  <div id="secret-wall-zone" style="margin-top:4px;"><button id="btn-declare-wall" onclick="toggleWallDeclaration()">赤石(絶対障壁)をシークレット申告</button></div>
-  <div id="skip-zone" style="margin-top:6px; display:none;"><button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">スライドをスキップ</button></div>
-  
+  <div id="phase-instruction">【自動シミュレーション】BOT vs Grok の全自動対局モードです</div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
-    <button id="btn-toggle-bot" onclick="toggleGrokBotMode()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【対戦相手】Grok AI (自動ON)</button>
+    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT vs Grok】全自動対局開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
-    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">ショートGIF抽出</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
   </div>
 </div>
 <div id="log-panel"></div>
@@ -77,7 +64,6 @@
   let boardSnapshots = []; 
   let currentTurnMove = { place: null, slide: null, event: null };
   let turnNumber = 1;
-  let isGrokAiEnabled = true;
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
   const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
@@ -96,7 +82,7 @@
     isWallDeclarationActive = false;
 
     blueStoneDropped = false;
-    board[2][4] = 'blue-reserved'; // B3のセルb2
+    board[2][4] = 'blue-reserved'; // B3-b2
 
     ntpnMoveHistory = [];
     boardSnapshots = [];
@@ -108,16 +94,16 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("NINE TOPOLOGY v2.3 起動！ Grok AI 評価関数モジュール接続済み。");
+    logMessage("システム起動 v2.4 (白:従来BOT vs 黒:Grok AI) 全自動対局準備完了。");
     renderBoard();
   }
 
-  /* === Grok提出の評価関数エンジン（v2.1のデータ構造へ適合） === */
+  /* === Grok提出の評価関数（v2.1二重配列構造への適応処理） === */
   function evaluateGrokMove(boardData, myColor, seasonInfo) {
     const { reservedPos: rp, isDropped, bonusMultiplier: mul } = seasonInfo;
     let best = null, max = -1e9;
 
-    // 1. Nine Topologyの b(ブロック) / c(セル) 配列を 9x9 2次元配列に変換してGrokの思考用データを構築
+    // 1. Nine Topologyの二重配列(9x9)を9x9直交座標へ変換
     let grid9x9 = Array.from({length: 9}, () => Array(9).fill(null));
     for (let b = 0; b < 9; b++) {
       for (let c = 0; c < 9; c++) {
@@ -127,7 +113,7 @@
       }
     }
 
-    // 2. Grokのロジック実行（全走査して最大評価値のマスを探す）
+    // 2. Grokの評価ループ実行
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
         if (grid9x9[r][c]) continue;
@@ -141,72 +127,12 @@
       }
     }
 
-    // 3. 9x9座標を v2.1 の {b, c} 形式へ逆引き変換
+    // 3. 計算結果を {b, c} 形式に戻す
     let target = best || { r: 4, c: 4 };
     let targetB = Math.floor(target.r / 3) * 3 + Math.floor(target.c / 3);
     let targetC = (target.r % 3) * 3 + (target.c % 3);
 
     return { place: { b: targetB, c: targetC }, slide: null };
-  }
-
-  /* === Grok AI の自動思考トリガー === */
-  function triggerGrokAiIfNeeded() {
-    if (!isGrokAiEnabled || currentPlayer !== 'black') return;
-
-    setTimeout(() => {
-      if (gamePhase === 'setup') {
-        const validTargets = [];
-        for (let b of CORNER_BLOCKS) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-          }
-        }
-        if (validTargets.length > 0) {
-          const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
-          handleCellClick(choice.b, choice.c);
-        }
-      } else if (gamePhase === 'place') {
-        const seasonInfo = {
-          reservedPos: { b: 2, c: 4 }, // B3-b2 (9x9座標表現でrow 2, col 4)
-          isDropped: blueStoneDropped,
-          bonusMultiplier: 2.0
-        };
-
-        const result = evaluateGrokMove(board, 'black', seasonInfo);
-        const target = result.place;
-
-        if (isValidPlaceTarget(target.b, target.c)) {
-          handleCellClick(target.b, target.c);
-        } else {
-          // フォールバック（評価マスが埋まっている場合）
-          for (let b = 0; b < 9; b++) {
-            for (let c = 0; c < 9; c++) {
-              if (isValidPlaceTarget(b, c)) {
-                handleCellClick(b, c);
-                return;
-              }
-            }
-          }
-        }
-      } else if (gamePhase === 'slide') {
-        // スライドフェーズ：Grokのロジックを優先（Grokはslide:null推奨のため基本スキップ、たまにランダムスライド）
-        if (Math.random() < 0.7 || emptyCount <= 15) {
-          skipSlide();
-        } else {
-          const availableBlocks = [];
-          for (let b = 0; b < 9; b++) {
-            if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
-          }
-          if (availableBlocks.length > 0) {
-            const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-            const dirs = ['up', 'down', 'left', 'right'];
-            executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
-          } else {
-            skipSlide();
-          }
-        }
-      }
-    }, 400);
   }
 
   function saveBoardSnapshot() {
@@ -234,6 +160,7 @@
 
   function commitTurnMove() {
     if (!currentTurnMove.place) return;
+
     const pSide = currentPlayer === 'white' ? 'W' : 'B';
     const placeStr = `${pSide}${currentTurnMove.place}`;
     const slideStr = currentTurnMove.slide ? `${pSide}${currentTurnMove.slide}` : `${pSide}>PASS`;
@@ -254,13 +181,13 @@
     const dateStr = now.toISOString().split('T')[0];
     const scores = calculateScores();
     let resultStr = "IN_PROGRESS";
-    if (emptyCount === 0) {
+    if (emptyCount === 0 || gamePhase === 'gameover') {
       if (scores.whiteScore > scores.blackScore) resultStr = "1-0";
       else if (scores.blackScore > scores.whiteScore) resultStr = "0-1";
       else resultStr = "1/2-1/2";
     }
 
-    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "Player"]\n[Black "Grok_AI"]\n[Result "${resultStr}"]\n\n`;
+    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "[Tokikagura] Test_Bot_A.ntai"]\n[Black "[xAI] Grok.ntai"]\n[Result "${resultStr}"]\n\n`;
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
 
     const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
@@ -270,7 +197,7 @@
     a.download = `NTPN_vsGrok_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
-    logMessage(`対戦記譜を保存完了！`);
+    logMessage(`対戦記譜をローカルへ保存完了！`);
   }
 
   function generateHighlightGIF() {
@@ -294,7 +221,7 @@
       a.download = `NineTopology_vsGrok_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
-      logMessage(`【GIF抽出完了】ローカルへ保存完了！`);
+      logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
     };
 
     mediaRecorder.start();
@@ -358,7 +285,7 @@
     const scores = calculateScores();
     emptyCount = countEmptyCells();
 
-    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白/あなた)' : '後手 (黒/Grok AI)';
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白/BOT)' : '後手 (黒/Grok)';
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = scores.whiteScore;
@@ -368,29 +295,17 @@
 
     const lockStatusEl = document.getElementById('slide-lock-status');
     const instructionEl = document.getElementById('phase-instruction');
-    const skipZone = document.getElementById('skip-zone');
 
     if (gamePhase === 'setup') {
       lockStatusEl.innerText = "準備フェーズ";
-      instructionEl.innerText = "【準備フェーズ】四隅のブロック(B1, B3, B7, B9)に石を配置してください";
-      skipZone.style.display = 'none';
+      instructionEl.innerText = "【準備フェーズ】四隅のブロック(B1, B3, B7, B9)に両BOTが石を配置中...";
     } else if (gamePhase === 'place') {
       lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
-      instructionEl.innerText = currentPlayer === 'white' ? "【配置フェーズ】好きな空きマスをタップして石を配置してください。" : "【思考中】Grok AIが最適な着手を選択しています...";
-      skipZone.style.display = 'none';
+      instructionEl.innerText = "【配置フェーズ】思考ロジックに従い石を自動配置中...";
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
-      instructionEl.innerText = "【スライドフェーズ】ブロックを選択して矢印でスライドするかスキップしてください。";
-      skipZone.style.display = currentPlayer === 'white' ? 'block' : 'none';
+      instructionEl.innerText = "【スライドフェーズ】ブロックのスライド処理を実行中...";
     }
-
-    triggerGrokAiIfNeeded();
-  }
-
-  function toggleWallDeclaration() {
-    if (gamePhase !== 'place' || wallCount[currentPlayer] <= 0) return;
-    isWallDeclarationActive = !isWallDeclarationActive;
-    updateStatusPanel();
   }
 
   function isValidPlaceTarget(b, c) {
@@ -443,12 +358,6 @@
     }
   }
 
-  function selectBlockForSlide(b) {
-    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
-    selectedBlock = b;
-    renderBoard();
-  }
-
   function executeSlide(b, direction) {
     if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
     const block = board[b];
@@ -496,25 +405,6 @@
     renderBoard();
   }
 
-  function addArrowButtons(blockEl, b) {
-    const dirs = [
-      { dir: 'up', symbol: '↑', class: 'arrow-up' },
-      { dir: 'down', symbol: '↓', class: 'arrow-down' },
-      { dir: 'left', symbol: '←', class: 'arrow-left' },
-      { dir: 'right', symbol: '→', class: 'arrow-right' }
-    ];
-    dirs.forEach(d => {
-      const btn = document.createElement('div');
-      btn.className = `arrow-btn ${d.class}`;
-      btn.innerText = d.symbol;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        executeSlide(b, d.dir);
-      });
-      blockEl.appendChild(btn);
-    });
-  }
-
   function renderBoard() {
     const container = document.getElementById('board-container');
     container.innerHTML = '';
@@ -524,8 +414,6 @@
       blockEl.className = 'block';
 
       if (slideLockedBlocks.includes(b)) blockEl.classList.add('locked');
-      if (gamePhase === 'slide' && emptyCount > 15 && !slideLockedBlocks.includes(b) && currentPlayer === 'white') blockEl.classList.add('selectable');
-      if (selectedBlock === b) blockEl.classList.add('selected');
 
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
@@ -536,50 +424,150 @@
           const stoneEl = document.createElement('div');
           stoneEl.className = `stone ${stoneType}`;
           cellEl.appendChild(stoneEl);
-        } else {
-          if ((gamePhase === 'setup' || gamePhase === 'place') && currentPlayer === 'white') {
-            if (isValidPlaceTarget(b, c)) cellEl.classList.add('highlight');
-          }
         }
-
-        cellEl.addEventListener('click', (e) => {
-          if ((gamePhase === 'setup' || gamePhase === 'place') && currentPlayer === 'white') {
-            e.stopPropagation();
-            handleCellClick(b, c);
-          }
-        });
 
         blockEl.appendChild(cellEl);
       }
-
-      if (selectedBlock === b && gamePhase === 'slide' && emptyCount > 15 && currentPlayer === 'white') {
-        addArrowButtons(blockEl, b);
-      }
-
-      blockEl.addEventListener('click', (e) => {
-        if (gamePhase === 'slide' && emptyCount > 15 && !slideLockedBlocks.includes(b) && currentPlayer === 'white') {
-          if (e.target.classList.contains('arrow-btn')) return;
-          selectBlockForSlide(b);
-        }
-      });
-
       container.appendChild(blockEl);
     }
-
     updateStatusPanel();
   }
 
-  function toggleGrokBotMode() {
-    isGrokAiEnabled = !isGrokAiEnabled;
-    const btn = document.getElementById('btn-toggle-bot');
-    if (isGrokAiEnabled) {
-      btn.innerText = "【対戦相手】Grok AI (自動ON)";
-      btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
-      triggerGrokAiIfNeeded();
+  /* === 全自動シミュレーション BOT エンジン (白:従来BOT vs 黒:Grok) === */
+  class NineTopologyGrokBattleBot {
+    constructor(speedMs = 30) {
+      this.speedMs = speedMs;
+      this.intervalId = null;
+      this.moveCount = 0;
+      this.maxMoves = 250;
+    }
+
+    start() {
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【対局中】全自動対局進行中...";
+        btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
+      }
+      logMessage("【BOT対局開始】白(従来BOT) vs 黒(Grok) の全自動シミュレーション始動！");
+      this.moveCount = 0;
+      this.intervalId = setInterval(() => {
+        try { this.step(); } 
+        catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
+      }, this.speedMs);
+    }
+
+    stop() {
+      if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【BOT vs Grok】全自動対局開始";
+        btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
+      }
+      logMessage("【対局停止】シミュレーションを停止しました。");
+    }
+
+    step() {
+      this.moveCount++;
+      if (this.moveCount > this.maxMoves) {
+        this.stop();
+        logMessage("【安全停止】最大手数に到達しました。");
+        return;
+      }
+
+      // 1. 準備フェーズ
+      if (gamePhase === 'setup') {
+        const validTargets = [];
+        for (let b of CORNER_BLOCKS) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      // 2. 配置フェーズ
+      if (gamePhase === 'place') {
+        let choice = null;
+
+        if (currentPlayer === 'black') {
+          // ★黒（Grok AI）の着手判断
+          const seasonInfo = {
+            reservedPos: { b: 2, c: 4 }, // B3-b2
+            isDropped: blueStoneDropped,
+            bonusMultiplier: 2.0
+          };
+          const res = evaluateGrokMove(board, 'black', seasonInfo);
+          if (isValidPlaceTarget(res.place.b, res.place.c)) {
+            choice = res.place;
+          }
+        }
+
+        // 白（従来BOT）またはGrokの推奨マスが埋まっていた場合のランダム着手フォールバック
+        if (!choice) {
+          const validTargets = [];
+          for (let b = 0; b < 9; b++) {
+            for (let c = 0; c < 9; c++) {
+              if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+            }
+          }
+
+          if (validTargets.length === 0) {
+            if (emptyCount === 0) {
+              this.stop();
+              const scores = calculateScores();
+              let result = "引き分け";
+              if (scores.whiteScore > scores.blackScore) result = "先手 (白/従来BOT) の勝利！";
+              else if (scores.blackScore > scores.whiteScore) result = "後手 (黒/Grok) の勝利！";
+
+              logMessage(`【対局決着】${result} (白:${scores.whiteScore} - 黒Grok:${scores.blackScore})`);
+              return;
+            }
+            throw new Error("配置可能マス不渡り");
+          }
+          choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        }
+
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      // 3. スライドフェーズ
+      if (gamePhase === 'slide') {
+        if (emptyCount <= 15) throw new Error("空き15以下スライドエラー");
+
+        if (Math.random() < 0.3) {
+          skipSlide();
+          return;
+        }
+
+        const availableBlocks = [];
+        for (let b = 0; b < 9; b++) {
+          if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
+        }
+
+        if (availableBlocks.length === 0) {
+          skipSlide();
+          return;
+        }
+
+        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+        const dirs = ['up', 'down', 'left', 'right'];
+        executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
+        return;
+      }
+    }
+  }
+
+  const testBot = new NineTopologyGrokBattleBot(30);
+
+  function toggleTestBot() {
+    if (testBot.intervalId) {
+      testBot.stop();
     } else {
-      btn.innerText = "【対戦相手】2P手動モード";
-      btn.style.background = "linear-gradient(135deg, #a3bac3, #ffffff)";
-      btn.style.color = "#0b0c10";
+      testBot.start();
     }
   }
 </script>
