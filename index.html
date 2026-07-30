@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.2c</title>
+<title>Nine Topology v2.2d</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -19,11 +19,11 @@
   .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; }
   #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
   button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; }
-  #log-panel { width: 100%; max-width: 340px; height: 80px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; border-radius: 4px; margin-top: 4px; padding: 4px; box-sizing: border-box; font-family: monospace; font-size: 0.65rem; color: #66fcf1; text-align: left; }
+  #log-panel { width: 100%; max-width: 340px; height: 80px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; border-radius: 4px; margin-top: 4px; padding: 4px; box-sizing: border-box; font-family: monospace; font-size: 0.65rem; color: #66fcf1; text-align: left; white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.2c</h1>
+<h1>NINE TOPOLOGY v2.2d</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span></span></div>
   <div class="flex-row"><span><b>白(自分):</b> <span id="score-p1" style="color:#fff;">0</span></span><span><b>黒(Grok):</b> <span id="score-p2" style="color:#a3bac3;">0</span></span></div>
@@ -37,6 +37,7 @@
   <div id="export-zone" style="display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleGrokBattle()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">対局テスト開始</button>
     <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
+    <button id="btn-copy-ntpn" onclick="copyNTPNLog()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">記譜(.ntpn)コピー</button>
   </div>
 </div>
 <div id="log-panel"></div>
@@ -65,11 +66,14 @@
   let reservedPos = { b: 2, c: 4 }; 
   let boardSnapshots = [];
   let winSnapshots = []; 
+  let ntpnLog = []; // 記譜テキストログ蓄積用
 
   let stats = { wins: 0, losses: 0 };
   let battleInterval = null;
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
+  const BLOCK_NAMES = ["B1","B2","B3","B4","B5","B6","B7","B8","B9"];
+  const CELL_NAMES  = ["a1","a2","a3","b1","b2","b3","c1","c2","c3"];
 
   window.onload = function() { initGame(); };
 
@@ -83,6 +87,8 @@
     reservedPos = { b: 2, c: 4 };
     board[reservedPos.b][reservedPos.c] = 'blue-reserved';
     boardSnapshots = [];
+    ntpnLog = ["[記譜データ]"];
+    document.getElementById('log-panel').innerHTML = "";
     saveBoardSnapshot();
     renderBoard();
   }
@@ -94,8 +100,15 @@
   function logMessage(msg) {
     const logPanel = document.getElementById('log-panel');
     if (!logPanel) return;
-    logPanel.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
+    logPanel.innerHTML += `${msg}\n`;
     logPanel.scrollTop = logPanel.scrollHeight;
+  }
+
+  function recordNTPN(actionType, b, c) {
+    const playerPrefix = currentPlayer === 'white' ? 'W' : 'B';
+    const moveStr = `${playerPrefix}:${BLOCK_NAMES[b]}-${CELL_NAMES[c]}`;
+    ntpnLog.push(moveStr);
+    logMessage(moveStr);
   }
 
   function checkBlueStoneDrop() {
@@ -159,7 +172,7 @@
       logMessage("対戦テストを一時停止しました。");
     } else {
       document.getElementById('btn-toggle-bot').innerText = "対局テスト中 (停止)";
-      logMessage("【v2.2c 起動】対局テストシミュレーションを実行中...");
+      logMessage("【v2.2d 起動】対局テストシミュレーションを実行中...");
       battleInterval = setInterval(stepBattle, 40);
     }
   }
@@ -175,6 +188,7 @@
       if (valid.length > 0) {
         const choice = valid[Math.floor(Math.random() * valid.length)];
         board[choice.b][choice.c] = currentPlayer;
+        recordNTPN('setup', choice.b, choice.c);
         setupCount++;
         if (setupCount === 4) gamePhase = 'place';
         currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
@@ -204,6 +218,7 @@
 
       if (target && board[target.b][target.c] === null) {
         board[target.b][target.c] = currentPlayer;
+        recordNTPN('place', target.b, target.c);
         saveBoardSnapshot();
 
         let empties = 0;
@@ -213,15 +228,15 @@
           const scores = calculateScores();
           if (scores.white > scores.black) {
             stats.wins++;
-            logMessage(`[対局終了] 先手(白)の勝利。 (白:${scores.white} vs 黒:${scores.black})`);
-            winSnapshots = [...boardSnapshots]; // 勝利時のアセットを内部保持
+            logMessage(`\n[対局終了] 先手(白)の勝利。 (白:${scores.white} vs 黒:${scores.black})`);
+            winSnapshots = [...boardSnapshots];
             clearInterval(battleInterval);
             battleInterval = null;
             document.getElementById('btn-toggle-bot').innerText = "対局テスト開始";
             renderBoard();
           } else {
             stats.losses++;
-            logMessage(`[対局終了] 後手(黒)の勝利。 (白:${scores.white} vs 黒:${scores.black}) -> 再試行`);
+            logMessage(`\n[対局終了] 後手(黒)の勝利。 (白:${scores.white} vs 黒:${scores.black}) -> 再試行`);
             initGame();
           }
           return;
@@ -232,6 +247,15 @@
         renderBoard();
       }
     }
+  }
+
+  function copyNTPNLog() {
+    const text = ntpnLog.join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      alert("記譜データ(.ntpn)をクリップボードにコピーしました！ Grok氏へ貼り付けて送信できます。");
+    }).catch(() => {
+      alert("コピーに失敗しました。ログパネルのテキストを手動で選択してコピペしてください。");
+    });
   }
 
   function generateHighlightGIF() {
