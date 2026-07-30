@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.2 (vs Grok)</title>
+<title>Nine Topology v2.2c</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -11,12 +11,10 @@
   .flex-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
   #board-container { position: relative; width: 324px; height: 324px; background: #1f2833; border: 3px solid #66fcf1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px; box-sizing: border-box; border-radius: 6px; overflow: visible; }
   .block { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 1px; background: #0b0c10; border-radius: 2px; position: relative; border: 2px solid transparent; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; overflow: visible; }
-  .block.locked { border: 2px solid #ff0055 !important; box-shadow: inset 0 0 8px rgba(255,0,85,0.5); }
   .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; position: relative; height: 32px; width: 32px; }
   .stone { width: 82%; height: 82%; border-radius: 50%; }
   .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
   .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
-  .stone.red { background: radial-gradient(circle, #ff0055 30%, #990022 90%); box-shadow: 0 0 10px #ff0055; border-radius: 4px; }
   .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; border-radius: 50%; }
   .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; }
   #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
@@ -25,27 +23,27 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.2 (vs Grok)</h1>
+<h1>NINE TOPOLOGY v2.2c</h1>
 <div id="status-panel">
-  <div class="flex-row"><span><b>手番:</b> <span id="current-player">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count">1</span></span></div>
-  <div class="flex-row"><span><b>白(自分):</b> <span id="score-p1">0</span></span><span><b>黒(Grok):</b> <span id="score-p2">0</span></span></div>
+  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span></span></div>
+  <div class="flex-row"><span><b>白(自分):</b> <span id="score-p1" style="color:#fff;">0</span></span><span><b>黒(Grok):</b> <span id="score-p2" style="color:#a3bac3;">0</span></span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;">
-    <span><b>対戦成績:</b> <span id="match-stats" style="color:#ff9900;">0勝 0敗</span></span>
+    <span><b>対戦通算:</b> <span id="match-stats" style="color:#ff9900;">0勝 0敗</span></span>
     <span id="season-info" style="color:#00d2ff;">青石: 5T降臨</span>
   </div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
   <div id="export-zone" style="display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
-    <button id="btn-toggle-bot" onclick="toggleGrokBattle()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【Grok対戦】全自動ループ開始</button>
-    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">1勝GIFアニメ抽出</button>
+    <button id="btn-toggle-bot" onclick="toggleGrokBattle()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">対局テスト開始</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
   </div>
 </div>
 <div id="log-panel"></div>
 <canvas id="video-canvas" width="324" height="324" style="display:none;"></canvas>
 
 <script>
-  /* === Grok提出の思考ロジック === */
+  /* === Grok思考ロジック === */
   function evaluateGrokMove(boardData, myColor, seasonInfo) {
     const {reservedPos: rp, isDropped, bonusMultiplier: mul} = seasonInfo;
     let best = null, max = -1e9;
@@ -58,16 +56,15 @@
     return {place: best||{b:4,c:4}, slide: null};
   }
 
-  /* === ゲーム管理 === */
   let board = Array.from({length: 9}, () => Array(9).fill(null));
   let currentPlayer = 'white';
   let gamePhase = 'setup';
   let setupCount = 0;
   let turnNumber = 1;
   let blueStoneDropped = false;
-  let reservedPos = { b: 2, c: 4 }; // B3-b2
+  let reservedPos = { b: 2, c: 4 }; 
   let boardSnapshots = [];
-  let winSnapshots = []; // Grokに勝った試合のみを保存する特別アセット
+  let winSnapshots = []; 
 
   let stats = { wins: 0, losses: 0 };
   let battleInterval = null;
@@ -105,8 +102,25 @@
     if (!blueStoneDropped && turnNumber === 5 && gamePhase === 'place') {
       board[reservedPos.b][reservedPos.c] = 'blue';
       blueStoneDropped = true;
-      logMessage("【環境イベント】青石が降臨いたしました！");
+      logMessage("【環境イベント】青石が降臨しました。");
     }
+  }
+
+  function calculateScores() {
+    let white = 0, black = 0;
+    const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    for(let b=0;b<9;b++){
+      lines.forEach(l => {
+        const s1=board[b][l[0]], s2=board[b][l[1]], s3=board[b][l[2]];
+        if(s1 && s1===s2 && s2===s3){
+          const hasBlue = (s1==='blue'||s2==='blue'||s3==='blue');
+          const pts = hasBlue ? 2 : 1;
+          if(s1==='white') white += pts; 
+          if(s1==='black') black += pts;
+        }
+      });
+    }
+    return { white, black };
   }
 
   function renderBoard() {
@@ -128,27 +142,30 @@
       }
       container.appendChild(blockEl);
     }
+    
+    const scores = calculateScores();
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白)' : '後手 (黒Grok)';
     document.getElementById('turn-count').innerText = turnNumber;
+    document.getElementById('score-p1').innerText = scores.white;
+    document.getElementById('score-p2').innerText = scores.black;
     document.getElementById('match-stats').innerText = `${stats.wins}勝 ${stats.losses}敗`;
   }
 
-  /* === 全自動Grok対戦ループ === */
   function toggleGrokBattle() {
     if (battleInterval) {
       clearInterval(battleInterval);
       battleInterval = null;
-      document.getElementById('btn-toggle-bot').innerText = "【Grok対戦】全自動ループ開始";
-      logMessage("対戦ループを停止しました。");
+      document.getElementById('btn-toggle-bot').innerText = "対局テスト開始";
+      logMessage("対戦テストを一時停止しました。");
     } else {
-      document.getElementById('btn-toggle-bot').innerText = "【Grok対戦中】（タップで停止）";
-      logMessage("【v2.2 起動】Grok対抗シミュレーション開始！ 勝ち越しGIFを検知中...");
+      document.getElementById('btn-toggle-bot').innerText = "対局テスト中 (停止)";
+      logMessage("【v2.2c 起動】対局テストシミュレーションを実行中...");
       battleInterval = setInterval(stepBattle, 40);
     }
   }
 
   function stepBattle() {
     if (gamePhase === 'setup') {
-      // 準備フェーズ（四隅に交互配置）
       const valid = [];
       for (let b of CORNER_BLOCKS) {
         for (let c = 0; c < 9; c++) {
@@ -171,15 +188,13 @@
 
       let target = null;
       if (currentPlayer === 'black') {
-        // Grokの手番！
         const seasonInfo = {
           dropTurn: 5, currentTurn: turnNumber, isDropped: blueStoneDropped,
           reservedPos: reservedPos, bonusMultiplier: 2.0
         };
         const grokRes = evaluateGrokMove(board, 'black', seasonInfo);
-        target = grokRes.place;
+        target = grokRes ? grokRes.place : null;
       } else {
-        // 白（従来ランダムBOT）の手番
         const valid = [];
         for(let b=0;b<9;b++) for(let c=0;c<9;c++) {
           if(board[b][c] === null) valid.push({b,c});
@@ -191,25 +206,23 @@
         board[target.b][target.c] = currentPlayer;
         saveBoardSnapshot();
 
-        // 終了判定（空きマスチェック）
         let empties = 0;
         for(let b=0;b<9;b++) for(let c=0;c<9;c++) if(!board[b][c]) empties++;
 
         if (empties === 0) {
-          // 対局決着！ スコア計算
           const scores = calculateScores();
           if (scores.white > scores.black) {
             stats.wins++;
-            logMessage(`【奇跡の1勝！】白の勝利！ (白:${scores.white} vs 黒Grok:${scores.black})`);
-            winSnapshots = [...boardSnapshots]; // 勝ち試合のGIFデータを確保！
+            logMessage(`[対局終了] 先手(白)の勝利。 (白:${scores.white} vs 黒:${scores.black})`);
+            winSnapshots = [...boardSnapshots]; // 勝利時のアセットを内部保持
             clearInterval(battleInterval);
             battleInterval = null;
-            document.getElementById('btn-toggle-bot').innerText = "【1勝達成！】GIF抽出ボタンを押してね";
-            alert("Grokに勝利した瞬間のハイライトGIFが抽出可能になりましたッ！");
+            document.getElementById('btn-toggle-bot').innerText = "対局テスト開始";
+            renderBoard();
           } else {
             stats.losses++;
-            logMessage(`Grokの勝利！ (白:${scores.white} vs 黒Grok:${scores.black}) -> リトライ中...`);
-            initGame(); // Grokを満足させるため即リトライ！
+            logMessage(`[対局終了] 後手(黒)の勝利。 (白:${scores.white} vs 黒:${scores.black}) -> 再試行`);
+            initGame();
           }
           return;
         }
@@ -221,29 +234,14 @@
     }
   }
 
-  function calculateScores() {
-    let white = 0, black = 0;
-    const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-    for(let b=0;b<9;b++){
-      lines.forEach(l => {
-        const s1=board[b][l[0]], s2=board[b][l[1]], s3=board[b][l[2]];
-        if(s1 && s1===s2 && s2===s3){
-          if(s1==='white') white++; if(s1==='black') black++;
-        }
-      });
-    }
-    return { white, black };
-  }
-
-  /* === 1勝GIF動画の生成機能 === */
   function generateHighlightGIF() {
     const targetData = winSnapshots.length > 0 ? winSnapshots : boardSnapshots;
     if (targetData.length < 2) {
-      logMessage("ハイライト抽出データが不足しています。");
+      logMessage("GIF抽出用のデータが足りません。");
       return;
     }
 
-    logMessage("【1勝GIF出力】Grokに勝利した決定的瞬間をGIFアニメ化中...");
+    logMessage("【GIF抽出】ハイライトアニメーションを出力中...");
     const canvas = document.getElementById('video-canvas');
     const ctx = canvas.getContext('2d');
     const stream = canvas.captureStream(30);
@@ -259,12 +257,12 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_VS_Grok_Victory_Turn${turnNumber}.gif`;
+      a.download = `NineTopology_Highlight.gif`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      logMessage("【出力成功！】Grokに勝った記念GIFのダウンロード完了！");
+      logMessage("【抽出完了】GIFファイルのダウンロードが完了しました。");
     };
 
     mediaRecorder.start();
