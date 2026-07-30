@@ -3,33 +3,41 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology (vs Grok)</title>
+<title>Nine Topology (BOT vs Grok)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; }
-  h1 { font-size: 1.2rem; color: #66fcf1; margin: 4px 0; }
-  #status-panel { width: 100%; max-width: 340px; background: #1f2833; border: 1px solid #45f3ff; border-radius: 6px; padding: 8px; margin-bottom: 8px; box-sizing: border-box; font-size: 0.85rem; display: flex; justify-content: space-between; }
+  h1 { font-size: 1.1rem; color: #66fcf1; margin: 4px 0; }
+  #status-panel { width: 100%; max-width: 340px; background: #1f2833; border: 1px solid #45f3ff; border-radius: 6px; padding: 8px; margin-bottom: 6px; box-sizing: border-box; font-size: 0.8rem; display: flex; justify-content: space-between; }
   #board-container { width: 324px; height: 324px; background: #1f2833; border: 3px solid #66fcf1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px; box-sizing: border-box; border-radius: 6px; }
   .block { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 1px; background: #0b0c10; }
-  .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; height: 32px; width: 32px; cursor: pointer; }
+  .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; height: 32px; width: 32px; }
   .stone { width: 82%; height: 82%; border-radius: 50%; }
   .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
   .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
   .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; }
   .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; background: rgba(0, 210, 255, 0.15); }
-  #log-panel { width: 100%; max-width: 340px; height: 100px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; margin-top: 8px; padding: 4px; font-family: monospace; font-size: 0.7rem; color: #66fcf1; white-space: pre-wrap; box-sizing: border-box; }
+  #control-panel { width: 100%; max-width: 340px; margin-top: 6px; display: flex; justify-content: center; gap: 4px; }
+  button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 12px; font-weight: bold; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+  #log-panel { width: 100%; max-width: 340px; height: 90px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; margin-top: 6px; padding: 4px; font-family: monospace; font-size: 0.65rem; color: #66fcf1; white-space: pre-wrap; box-sizing: border-box; }
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY (vs Grok)</h1>
+<h1>NINE TOPOLOGY (BOT vs Grok)</h1>
 <div id="status-panel">
-  <div>手番: <span id="current-player" style="color:#66fcf1; font-weight:bold;">先手 (白)</span></div>
+  <div>手番: <span id="current-player" style="color:#66fcf1;">先手 (白:BOT)</span></div>
   <div>ターン: <span id="turn-count">1</span></div>
 </div>
 <div id="board-container"></div>
+<div id="control-panel">
+  <button onclick="startAutoMatch()">対局開始</button>
+  <button onclick="generateGIF()">10秒GIF抽出</button>
+  <button onclick="copyNTPN()">記譜コピー</button>
+</div>
 <div id="log-panel"></div>
+<canvas id="video-canvas" width="324" height="324" style="display:none;"></canvas>
 
 <script>
-  /* === Grok思考ロジック (差し替え部分) === */
+  /* === Grok思考ロジック === */
   function evaluateGrokMove(boardData, myColor, seasonInfo) {
     const {reservedPos: rp, isDropped, bonusMultiplier: mul} = seasonInfo;
     let best = null, max = -1e9;
@@ -49,6 +57,10 @@
   let turnNumber = 1;
   let blueStoneDropped = false;
   let reservedPos = { b: 2, c: 4 }; 
+  let snapshots = [];
+  let ntpnLog = [];
+  let matchTimer = null;
+
   const CORNER_BLOCKS = [0, 2, 6, 8];
   const BLOCK_NAMES = ["B1","B2","B3","B4","B5","B6","B7","B8","B9"];
   const CELL_NAMES  = ["a1","a2","a3","b1","b2","b3","c1","c2","c3"];
@@ -56,95 +68,97 @@
   window.onload = function() { initGame(); };
 
   function initGame() {
+    board = Array.from({length: 9}, () => Array(9).fill(null));
     board[reservedPos.b][reservedPos.c] = 'blue-reserved';
-    logMessage("ゲーム開始。あなたは白(先手)、相手はGrok(後手)です。");
+    snapshots = [];
+    ntpnLog = ["[記譜データ]"];
+    document.getElementById('log-panel').innerHTML = "";
+    saveSnapshot();
     renderBoard();
   }
 
-  function logMessage(msg) {
+  function saveSnapshot() {
+    snapshots.push(board.map(arr => [...arr]));
+  }
+
+  function logMsg(msg) {
     const p = document.getElementById('log-panel');
     p.innerHTML += `${msg}\n`;
     p.scrollTop = p.scrollHeight;
   }
 
-  // プレイヤーのクリック処理
-  function handleCellClick(b, c) {
-    if (currentPlayer !== 'white') return; // Grokのターン中は操作不可
-    if (board[b][c] !== null) return;
-    
+  function startAutoMatch() {
+    if (matchTimer) clearInterval(matchTimer);
+    initGame();
+    logMsg("対局開始 (先手:従来BOT vs 後手:Grok)");
+    matchTimer = setInterval(stepMatch, 300);
+  }
+
+  function stepMatch() {
     if (gamePhase === 'setup') {
-      if (!CORNER_BLOCKS.includes(b)) return;
-      if (board[b].includes('white') || board[b].includes('black')) return;
-      executeMove(b, c);
-    } else if (gamePhase === 'place') {
-      if (!blueStoneDropped && b === reservedPos.b && c === reservedPos.c) return;
-      executeMove(b, c);
+      const valid = [];
+      for (let b of CORNER_BLOCKS) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] === null && !board[b].includes(currentPlayer)) valid.push({b,c});
+        }
+      }
+      if (valid.length > 0) {
+        const choice = valid[Math.floor(Math.random() * valid.length)];
+        executeMove(choice.b, choice.c);
+        setupCount++;
+        if (setupCount >= 4) gamePhase = 'place';
+      }
+      return;
+    }
+
+    if (gamePhase === 'place') {
+      if (!blueStoneDropped && turnNumber === 5) {
+        board[reservedPos.b][reservedPos.c] = 'blue';
+        blueStoneDropped = true;
+        logMsg("【青石降臨】");
+      }
+
+      let target = null;
+      if (currentPlayer === 'white') {
+        // 白：従来ランダムBOT
+        const valid = [];
+        for(let b=0;b<9;b++) for(let c=0;c<9;c++) {
+          if(board[b][c] === null && !( !blueStoneDropped && b===reservedPos.b && c===reservedPos.c )) valid.push({b,c});
+        }
+        if(valid.length > 0) target = valid[Math.floor(Math.random() * valid.length)];
+      } else {
+        // 黒：Grok
+        const seasonInfo = { dropTurn: 5, currentTurn: turnNumber, isDropped: blueStoneDropped, reservedPos: reservedPos, bonusMultiplier: 2.0 };
+        const res = evaluateGrokMove(board, 'black', seasonInfo);
+        target = res ? res.place : null;
+      }
+
+      if (target && board[target.b][target.c] === null) {
+        executeMove(target.b, target.c);
+
+        let empties = 0;
+        for(let b=0;b<9;b++) for(let c=0;c<9;c++) if(!board[b][c]) empties++;
+        if (empties === 0) {
+          clearInterval(matchTimer);
+          matchTimer = null;
+          logMsg("【対局終了】");
+          return;
+        }
+
+        turnNumber++;
+      }
     }
   }
 
   function executeMove(b, c) {
     board[b][c] = currentPlayer;
     const prefix = currentPlayer === 'white' ? 'W' : 'B';
-    logMessage(`${prefix}:${BLOCK_NAMES[b]}-${CELL_NAMES[c]}`);
-    
-    if (gamePhase === 'setup') {
-      setupCount++;
-      if (setupCount >= 4) gamePhase = 'place';
-    } else {
-      turnNumber++;
-    }
-
-    // 終了判定
-    let empties = 0;
-    for(let i=0;i<9;i++) for(let j=0;j<9;j++) if(!board[i][j]) empties++;
-    if (empties === 0) {
-      logMessage("対局終了！");
-      renderBoard();
-      return;
-    }
-
+    const logStr = `${prefix}:${BLOCK_NAMES[b]}-${CELL_NAMES[c]}`;
+    ntpnLog.push(logStr);
+    logMsg(logStr);
+    saveSnapshot();
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    
-    // 青石の降臨チェック
-    if (!blueStoneDropped && turnNumber === 5 && gamePhase === 'place') {
-      board[reservedPos.b][reservedPos.c] = 'blue';
-      blueStoneDropped = true;
-      logMessage("【青石降臨】");
-    }
-
     renderBoard();
-
-    // Grok（黒）の手番なら少し待ってから実行
-    if (currentPlayer === 'black') {
-      setTimeout(grokTurn, 500);
-    }
-  }
-
-  // Grokのターン処理
-  function grokTurn() {
-    if (gamePhase === 'setup') {
-      // 準備フェーズはGrokもランダム（空き隅へ）
-      const valid = [];
-      for (let b of CORNER_BLOCKS) {
-        for (let c = 0; c < 9; c++) {
-          if (board[b][c] === null && !board[b].includes('black') && !board[b].includes('white')) valid.push({b,c});
-        }
-      }
-      if (valid.length > 0) {
-        const choice = valid[Math.floor(Math.random() * valid.length)];
-        executeMove(choice.b, choice.c);
-      }
-    } else {
-      // メインフェーズはGrokの評価関数を使用！
-      const seasonInfo = {
-        dropTurn: 5, currentTurn: turnNumber, isDropped: blueStoneDropped,
-        reservedPos: reservedPos, bonusMultiplier: 2.0
-      };
-      const res = evaluateGrokMove(board, 'black', seasonInfo);
-      if (res && res.place && board[res.place.b][res.place.c] === null) {
-        executeMove(res.place.b, res.place.c);
-      }
-    }
   }
 
   function renderBoard() {
@@ -156,7 +170,6 @@
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
         cellEl.className = 'cell';
-        cellEl.onclick = () => handleCellClick(b, c);
         const stone = board[b][c];
         if (stone) {
           const s = document.createElement('div');
@@ -167,8 +180,60 @@
       }
       container.appendChild(blockEl);
     }
-    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白:あなた)' : '後手 (黒:Grok)';
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白:BOT)' : '後手 (黒:Grok)';
     document.getElementById('turn-count').innerText = turnNumber;
+  }
+
+  function copyNTPN() {
+    navigator.clipboard.writeText(ntpnLog.join("\n"));
+    alert("記譜データ(.ntpn)をコピーしました！");
+  }
+
+  function generateGIF() {
+    logMsg("GIF生成中...");
+    const canvas = document.getElementById('video-canvas');
+    const ctx = canvas.getContext('2d');
+    const stream = canvas.captureStream(30);
+    let options = { mimeType: 'image/gif' };
+    if (!MediaRecorder.isTypeSupported('image/gif')) options = { mimeType: 'video/webm' };
+    const recorder = new MediaRecorder(stream, options);
+    const chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: 'image/gif' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'NineTopology_GrokMatch.gif';
+      a.click();
+      logMsg("GIFダウンロード完了！");
+    };
+    recorder.start();
+    let f = 0;
+    const inv = setInterval(() => {
+      if (f >= snapshots.length) { clearInterval(inv); setTimeout(() => recorder.stop(), 300); return; }
+      drawCanvas(ctx, snapshots[f]);
+      f++;
+    }, 400);
+  }
+
+  function drawCanvas(ctx, bData) {
+    ctx.fillStyle = "#1f2833"; ctx.fillRect(0, 0, 324, 324);
+    for (let b = 0; b < 9; b++) {
+      const bx = (b % 3) * 108 + 4, by = Math.floor(b / 3) * 108 + 4;
+      ctx.fillStyle = "#0b0c10"; ctx.fillRect(bx, by, 100, 100);
+      for (let c = 0; c < 9; c++) {
+        const cx = bx + (c % 3) * 33 + 1, cy = by + Math.floor(c / 3) * 33 + 1;
+        ctx.fillStyle = "#1f2833"; ctx.fillRect(cx, cy, 32, 32);
+        const s = bData[b][c];
+        if (s) {
+          ctx.beginPath(); ctx.arc(cx + 16, cy + 16, 13, 0, Math.PI * 2);
+          if (s === 'white') ctx.fillStyle = "#ffffff";
+          else if (s === 'black') ctx.fillStyle = "#4b5d67";
+          else if (s === 'blue') ctx.fillStyle = "#00d2ff";
+          ctx.fill();
+        }
+      }
+    }
   }
 </script>
 </body>
