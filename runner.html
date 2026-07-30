@@ -40,7 +40,7 @@
   <div class="section-title"><span>🤖 外部AI (.ntai) の読み込み</span></div>
   
   <!-- ① ファイル選択/ドラッグ＆ドロップ エリア -->
-  <div id="file-drop-zone" onclick="document.getElementById('file-input').click()">
+  <div id="file-drop-zone" onclick="triggerFileInput()">
     <span id="drop-zone-text">📁 タップして .ntai ファイルを選択<br><span style="font-size: 0.65rem; color: #a3bac3;">(またはここにファイルをドロップ)</span></span>
     <input type="file" id="file-input" accept=".ntai,.js,.txt" onchange="handleFileSelect(event)">
   </div>
@@ -55,6 +55,12 @@
 
 <script>
   let loadedCode = "";
+
+  function triggerFileInput() {
+    const fileInput = document.getElementById('file-input');
+    fileInput.value = ''; // 同名ファイルの再選択を許可
+    fileInput.click();
+  }
 
   // ドラッグ＆ドロップのイベント制御
   const dropZone = document.getElementById('file-drop-zone');
@@ -107,18 +113,30 @@
 
     const iframe = document.getElementById('game-frame');
     try {
+      const iframeWin = iframe.contentWindow;
+
+      // 既存の対局をリセット（initGameが存在すれば実行）
+      if (typeof iframeWin.initGame === 'function') {
+        iframeWin.initGame();
+      }
+
+      // 古い注入スクリプトがあれば削除
+      const oldScript = iframeWin.document.getElementById('ntai-injected-script');
+      if (oldScript) oldScript.remove();
+
       // iframe 内に script タグを生成して注入
-      const script = iframe.contentWindow.document.createElement('script');
+      const script = iframeWin.document.createElement('script');
+      script.id = 'ntai-injected-script';
       script.textContent = codeToInject + `\n
         if (window.NTAI_Engine) {
           console.log("NTAI Engine Loaded:", window.NTAI_Engine.name);
         }
       `;
-      iframe.contentWindow.document.body.appendChild(script);
+      iframeWin.document.body.appendChild(script);
 
       // 読み込み完了情報の表示
       setTimeout(() => {
-        const engine = iframe.contentWindow.window.NTAI_Engine;
+        const engine = iframeWin.NTAI_Engine;
         const infoEl = document.getElementById('loaded-ai-info');
         if (engine && engine.name) {
           infoEl.innerHTML = `🟢 読み込み成功: <b>${engine.name}</b> (${engine.author || '不明'})`;
