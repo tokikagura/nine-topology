@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.0r3 (Red Wall System Added)</title>
+<title>Nine Topology v2.1c (Setup Notation Fixed)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,17 +27,18 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.0r3 (赤石障壁完全実装版)</h1>
+<h1>NINE TOPOLOGY v2.1c (初期配置記譜対応版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
-  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目 B7に降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
   <div id="phase-instruction">【検証モード】赤石シークレット申告＆2T自動出現対応</div>
-  <div style="margin: 4px 0;">
+  <div style="margin: 4px 0; display: flex; justify-content: center; gap: 4px;">
     <button id="btn-wall-declare" onclick="toggleWallDeclaration()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">赤石 (絶対障壁) をセット申告</button>
+    <button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #a3bac3, #4b5d67); color: #fff;" disabled>スライドをパス</button>
   </div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【全自動対局】開始 / 停止</button>
@@ -60,7 +61,6 @@
   let setupCount = 0;
   let isWallDeclarationActive = false;
 
-  // 赤石（絶対障壁）予約リスト: [{ b, c, dueTurn, player }]
   let redReservations = [];
 
   const SEASON_DROP_TURN = 5;
@@ -89,7 +89,7 @@
     redReservations = [];
 
     blueStoneDropped = false;
-    board[2][4] = 'blue-reserved'; // B3-b2
+    board[5][4] = 'blue-reserved'; // B6-b2
 
     ntpnMoveHistory = [];
     boardSnapshots = [];
@@ -101,7 +101,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.0r3 (赤石障壁2T後出現プロトコル実装) 準備完了。");
+    logMessage("システム起動 v2.1c (準備フェーズ任意位置の記譜対応) 準備完了。");
     renderBoard();
   }
 
@@ -122,15 +122,13 @@
     }
   }
 
-  /* 赤石出現のタイマー処理 (2ターン後手番時) */
   function processRedReservations() {
     let remaining = [];
     for (let res of redReservations) {
       if (res.dueTurn === turnNumber) {
-        if (board[res.b][res.c] === null || board[res.b][res.c] === 'blue-reserved') {
+        if (board[res.b][res.c] === null) {
           board[res.b][res.c] = 'red';
           logMessage(`【環境イベント】${res.player === 'white' ? '白' : '黒'}が申告した【赤石（絶対障壁）】が B${res.b+1}-${CELL_NAMES[res.c]} に出現！`);
-          // 出現による呼吸点遮断・捕獲チェック
           let grid = get9x9Grid(board);
           processCaptures(grid, 'white', false);
           processCaptures(grid, 'black', false);
@@ -169,7 +167,7 @@
 
   function getGroupLiberties(grid, startR, startC) {
     const targetType = grid[startR][startC];
-    if (!targetType || targetType === 'red' || targetType === 'blue-reserved') {
+    if (!targetType || targetType === 'red') {
       return { group: [], liberties: 99 };
     }
 
@@ -192,7 +190,7 @@
 
         if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
           let neighbor = grid[nr][nc];
-          if (neighbor === null) {
+          if (neighbor === null || neighbor === 'blue-reserved') {
             liberties.add(`${nr},${nc}`);
           } else if (neighbor === targetType && !visited[nr][nc]) {
             visited[nr][nc] = true;
@@ -276,14 +274,37 @@
   }
 
   function checkBlueStoneDrop() {
-    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN && gamePhase === 'place') {
-      if (board[2][4] === 'blue-reserved') {
-        board[2][4] = 'blue';
-        blueStoneDropped = true;
-        currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B3-b2]`;
-        logMessage(`【シーズン環境イベント】青石が B3-b2 にドロップ降臨いたしました！`);
+    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN) {
+      for (let b = 0; b < 9; b++) {
+        let idx = board[b].indexOf('blue-reserved');
+        if (idx !== -1) board[b][idx] = null;
       }
+
+      const targetBlock = 6; // B7
+      const targetCell = 4;  // b2
+      const overwrittenStone = board[targetBlock][targetCell];
+
+      board[targetBlock][targetCell] = 'blue';
+      blueStoneDropped = true;
+
+      currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B7-${CELL_NAMES[targetCell]}]`;
+      
+      let overwriteNote = overwrittenStone ? ` (既存の石[${overwrittenStone}]を消滅消去)` : '';
+      logMessage(`【シーズン環境イベント】青石が B6 予告地から破断移動し、B7-${CELL_NAMES[targetCell]} にドロップ降臨いたしました！${overwriteNote}`);
+
+      let grid = get9x9Grid(board);
+      processCaptures(grid, 'white', false);
+      processCaptures(grid, 'black', false);
+      set9x9GridToBoard(grid, board);
     }
+  }
+
+  function advanceTurn() {
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    processRedReservations();
+    checkBlueStoneDrop();
+    renderBoard();
   }
 
   function commitTurnMove() {
@@ -323,21 +344,26 @@
 
     const lockStatusEl = document.getElementById('slide-lock-status');
     const instructionEl = document.getElementById('phase-instruction');
+    const skipBtn = document.getElementById('btn-skip-slide');
 
     if (gamePhase === 'setup') {
       lockStatusEl.innerText = "準備フェーズ";
       instructionEl.innerText = "【準備フェーズ】四隅ブロックに各自初期石をデポジット中...";
+      if (skipBtn) skipBtn.disabled = true;
     } else if (gamePhase === 'place') {
       lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
       instructionEl.innerText = "【配置フェーズ】石を配置して呼吸点を包囲してください";
+      if (skipBtn) skipBtn.disabled = true;
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
       instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
+      if (skipBtn) skipBtn.disabled = false;
     }
   }
 
   function isValidPlaceTarget(b, c) {
     if (board[b][c] !== null) return false;
+
     if (gamePhase === 'setup') {
       if (!CORNER_BLOCKS.includes(b)) return false;
       if (board[b].some(stone => stone === currentPlayer)) return false;
@@ -353,11 +379,22 @@
     if (gamePhase === 'setup') {
       if (!isValidPlaceTarget(b, c)) return;
       board[b][c] = currentPlayer;
+      
+      // 準備フェーズの初期石配置も記譜に記録
+      const pSide = currentPlayer === 'white' ? 'W' : 'B';
+      const cellCoord = CELL_NAMES[c];
+      ntpnMoveHistory.push(`[SETUP] ${pSide}+B${b+1}-${cellCoord}`);
+      logMessage(`[記譜] [SETUP] ${pSide}+B${b+1}-${cellCoord}`);
+      saveBoardSnapshot();
+
       setupCount++;
       if (setupCount === 4) {
         gamePhase = 'place';
+        currentPlayer = 'white';
         processRedReservations();
         checkBlueStoneDrop();
+        renderBoard();
+        return;
       }
       currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
       renderBoard();
@@ -366,7 +403,6 @@
 
       const cellCoord = CELL_NAMES[c];
       if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
-        // 赤石（絶対障壁）のシークレット申告 (2ターン後出現: +2ターン)
         wallCount[currentPlayer]--;
         isWallDeclarationActive = false;
         const btn = document.getElementById('btn-wall-declare');
@@ -390,20 +426,14 @@
         logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
         currentTurnMove.slide = null;
         commitTurnMove();
-        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-        gamePhase = 'place';
-        processRedReservations();
-        checkBlueStoneDrop();
+        advanceTurn();
       } else if (emptyCount <= 15) {
         commitTurnMove();
-        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-        gamePhase = 'place';
-        processRedReservations();
-        checkBlueStoneDrop();
+        advanceTurn();
       } else {
         gamePhase = 'slide';
+        renderBoard();
       }
-      renderBoard();
     }
   }
 
@@ -441,11 +471,7 @@
 
     commitTurnMove();
     slideLockedBlocks = [b];
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    processRedReservations();
-    checkBlueStoneDrop();
-    renderBoard();
+    advanceTurn();
   }
 
   function skipSlide() {
@@ -453,11 +479,7 @@
     currentTurnMove.slide = null;
     commitTurnMove();
     slideLockedBlocks = [];
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    processRedReservations();
-    checkBlueStoneDrop();
-    renderBoard();
+    advanceTurn();
   }
 
   function renderBoard() {
@@ -473,6 +495,7 @@
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
         cellEl.className = 'cell';
+        cellEl.onclick = () => handleCellClick(b, c);
 
         const stoneType = board[b][c];
         if (stoneType) {
@@ -503,7 +526,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.0r3 (赤石シークレット予約対応) スタート！");
+      logMessage("【BOT対局開始】v2.1c スタート！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
@@ -543,7 +566,6 @@
       }
 
       if (gamePhase === 'place') {
-        // 赤石のランダム申告 (15%の確率)
         if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
           isWallDeclarationActive = true;
         } else {
@@ -558,16 +580,12 @@
         }
 
         if (validTargets.length === 0) {
-          if (emptyCount === 0) {
-            this.stop();
-            let result = "引き分け";
-            if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
-            else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
+          this.stop();
+          let result = "引き分け";
+          if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
+          else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
 
-            logMessage(`【対局決着】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
-            return;
-          }
-          skipSlide();
+          logMessage(`【対局決着（詰み）】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
           return;
         }
 
@@ -627,7 +645,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_Restored_v2.0r3_NineTopology.ntpn`;
+    a.download = `NTPN_Restored_v2.1c_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -651,7 +669,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v2.0r3_Highlight.gif`;
+      a.download = `NineTopology_v2.1c_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
