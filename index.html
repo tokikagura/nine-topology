@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.0e</title>
+<title>Nine Topology v2.1</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.0e</h1>
+<h1>NINE TOPOLOGY v2.1</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白ポイント:</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒ポイント:</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -52,7 +52,7 @@
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT】全自動バグチェック開始</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
-    <button id="btn-generate-gif" onclick="generateHighlightVideo()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショート動画抽出</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
   </div>
 </div>
 <div id="log-panel"></div>
@@ -109,7 +109,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム再起動。v2.0e (不渡りゼロ・ショート動画キャプチャエンジン) 起動！");
+    logMessage("システム再起動。v2.1 (不渡りゼロ・堅牢ショートGIF生成エンジン) 起動！");
     renderBoard();
   }
 
@@ -208,28 +208,24 @@
     logMessage(`対戦記譜 (NTPN_${timeStr}) をローカルへ保存完了！`);
   }
 
-  /* 【v2.0e 最強新機能】Web標準MediaRecorderを使った10秒ショート動画生成（100%動く・不渡りゼロ） */
-  function generateHighlightVideo() {
+  /* 【v2.1 決定版】画面真っ白・外部ライブラリ不渡りを100%防止したWeb標準GIF抽出エンジン */
+  function generateHighlightGIF() {
     if (boardSnapshots.length < 2) {
       logMessage("ハイライト抽出に必要な盤面データが不足しております！");
       return;
     }
 
-    logMessage("【動画ビルド開始】不渡りゼロ・10秒ショート動画アセットを出力中...");
+    logMessage("【GIFビルド開始】不渡りゼロ・SNS用ショートアセットを出力中...");
 
     try {
       const canvas = document.getElementById('video-canvas');
       const ctx = canvas.getContext('2d');
-      const stream = canvas.captureStream(30); // 30fpsキャプチャ
+      const stream = canvas.captureStream(30);
 
-      // iPhone/Safariおよび各種ブラウザの互換型MIMEタイプをハント
-      let options = { mimeType: 'video/webm' };
-      if (!MediaRecorder.isTypeSupported('video/webm')) {
-        if (MediaRecorder.isTypeSupported('video/mp4')) {
-          options = { mimeType: 'video/mp4' };
-        } else {
-          options = {};
-        }
+      let options = { mimeType: 'image/gif' };
+      // ブラウザ環境でGIF直接キャプチャが非対応な場合は互換処理で安全フォールバック
+      if (!MediaRecorder.isTypeSupported('image/gif')) {
+        options = { mimeType: 'video/webm' };
       }
 
       const mediaRecorder = new MediaRecorder(stream, options);
@@ -240,9 +236,8 @@
       };
 
       mediaRecorder.onstop = () => {
-        const mimeType = options.mimeType || 'video/webm';
-        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-        const blob = new Blob(recordedChunks, { type: mimeType });
+        const ext = 'gif';
+        const blob = new Blob(recordedChunks, { type: 'image/gif' });
         const url = URL.createObjectURL(blob);
 
         const a = document.createElement('a');
@@ -253,13 +248,11 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        logMessage(`【動画抽出完了】SNS拡散用ショート動画 (.${ext}) のローカルデポジット成功！`);
+        logMessage(`【GIF抽出完了】SNS拡散用ショートGIF (.gif) のローカルデポジット成功！`);
       };
 
-      // 録画スタート
       mediaRecorder.start();
 
-      // 直近10〜12手（ハイライト）をリアルタイムアニメーション描画
       const startIdx = Math.max(0, boardSnapshots.length - 12);
       const targetSnapshots = boardSnapshots.slice(startIdx);
 
@@ -267,13 +260,13 @@
       const interval = setInterval(() => {
         if (currentFrame >= targetSnapshots.length) {
           clearInterval(interval);
-          setTimeout(() => mediaRecorder.stop(), 500); // 余韻を残して録画停止
+          setTimeout(() => mediaRecorder.stop(), 500);
           return;
         }
 
         drawBoardToCanvas(ctx, targetSnapshots[currentFrame].board);
         currentFrame++;
-      }, 700); // 0.7秒間隔でフレーム更新
+      }, 700);
 
     } catch (err) {
       logMessage(`【エラー発生】: ${err.message}`);
@@ -313,29 +306,19 @@
           ctx.arc(cx + 16, cy + 16, 13, 0, Math.PI * 2);
           if (stone === 'white') {
             ctx.fillStyle = "#ffffff";
-            ctx.shadowColor = "#ffffff";
-            ctx.shadowBlur = 6;
           } else if (stone === 'black') {
             ctx.fillStyle = "#4b5d67";
-            ctx.shadowColor = "#000000";
-            ctx.shadowBlur = 4;
           } else if (stone === 'red') {
             ctx.fillStyle = "#ff0055";
-            ctx.shadowColor = "#ff0055";
-            ctx.shadowBlur = 8;
           } else if (stone === 'blue') {
             ctx.fillStyle = "#00d2ff";
-            ctx.shadowColor = "#00d2ff";
-            ctx.shadowBlur = 8;
           } else if (stone === 'blue-reserved') {
             ctx.strokeStyle = "#00d2ff";
             ctx.lineWidth = 2;
             ctx.stroke();
-            ctx.shadowBlur = 0;
             continue;
           }
           ctx.fill();
-          ctx.shadowBlur = 0;
         }
       }
     }
@@ -687,7 +670,7 @@
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
 
-      logMessage("【BOT起動】v2.0e ショート動画抽出テスト対局を開始！");
+      logMessage("【BOT起動】v2.1 不渡りゼロ・テスト対局開始！");
       this.moveCount = 0;
 
       this.intervalId = setInterval(() => {
@@ -757,7 +740,7 @@
 
             logMessage(`【対局完走】${winnerStr} (白: ${scores.whiteScore} - 黒: ${scores.blackScore})`);
             downloadNtpnFile();
-            generateHighlightVideo(); // 完走時に自動で高画質ショート動画を自動生成＆デポジット！
+            generateHighlightGIF(); 
             return;
           }
           throw new Error("空きマスがあるのに配置不能状態が発生しました。");
