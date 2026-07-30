@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.4c (BOT vs Grok v4)</title>
+<title>Nine Topology v2.0r (Capture Engine Restored)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,17 +27,17 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.4c (BOT vs Grok v4)</h1>
+<h1>NINE TOPOLOGY v2.0r (呼吸点捕獲復元版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
-  <div class="flex-row"><span><b>白 (従来BOT):</b> <span id="score-p1" style="color:#fff;">0</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 ([xAI] Grok v4):</b> <span id="score-p2" style="color:#a3bac3;">0</span> (壁残:<span id="wall-p2">4</span>)</span></div>
+  <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
-  <div id="phase-instruction">【自動シミュレーション】BOT vs Grok v4 (縦ライン・下スライド追加版)</div>
+  <div id="phase-instruction">【検証モード】v1.6 呼吸点・連捕獲復元プロトコル動作中</div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
-    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【BOT vs Grok v4】全自動対局開始</button>
+    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【全自動対局】開始 / 停止</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
     <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
   </div>
@@ -50,8 +50,8 @@
   let board = Array.from({length: 9}, () => Array(9).fill(null));
   let emptyCount = 81;
   let wallCount = { white: 3, black: 4 };
+  let playerScores = { white: 0, black: 0 };
   let slideLockedBlocks = [];
-  let selectedBlock = null;
   let currentPlayer = 'white';
   let gamePhase = 'setup';
   let setupCount = 0;
@@ -74,8 +74,8 @@
     board = Array.from({length: 9}, () => Array(9).fill(null));
     emptyCount = 81;
     wallCount = { white: 3, black: 4 };
+    playerScores = { white: 0, black: 0 };
     slideLockedBlocks = [];
-    selectedBlock = null;
     currentPlayer = 'white';
     gamePhase = 'setup';
     setupCount = 0;
@@ -94,61 +94,146 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.4c (Grok v4 思考エンジン接続) 準備完了。");
+    logMessage("システム起動 v2.0r (呼吸点・キャプチャー型復元プロトコル) 準備完了。");
     renderBoard();
   }
 
-  /* === Grok提出の v4 評価関数（画像から完全再現） === */
-  function evaluateGrokMoveV4(board, myColor, seasonInfo) {
-    const { reservedPos: rp, isDropped, bonusMultiplier: mul } = seasonInfo;
-    let best = null, max = -1e9;
-    for (let r = 0; r < 9; r++)
-      for (let c = 0; c < 9; c++) {
-        if (board[r][c] || (!isDropped && r == rp.b && c == rp.c)) continue;
-        let s = mul * 5 / (1 + Math.abs(r - rp.b) + Math.abs(c - rp.c));
-        const br = r / 3 | 0, bc = c / 3 | 0;
-        for (let i = 0; i < 3; i++) {
-          if (board[r][bc * 3 + i] == myColor) s += 3;
-          if (board[br * 3 + i][c] == myColor) s += 3;
-        }
-        if (s > max) { max = s; best = { b: r, c: c }; }
-      }
-    let slide = null;
-    if (!isDropped) slide = { b: (rp.b / 3 | 0) * 3 + (rp.c / 3 | 0), dir: "down" };
-    return { place: best || { b: 4, c: 4 }, slide };
-  }
-
-  /* === Grok v4 を Nine Topology の {b, c} 構造へ補正するラッパー === */
-  function getGrokV4MoveWrapped(boardData, myColor, seasonInfo) {
-    let grid9x9 = Array.from({length: 9}, () => Array(9).fill(null));
+  /* ========================================================
+     【コア復元エンジン】9x9 トポロジー & 呼吸点・捕獲ロジック
+     ======================================================== */
+  function get9x9Grid(boardData) {
+    let grid = Array.from({length: 9}, () => Array(9).fill(null));
     for (let b = 0; b < 9; b++) {
       for (let c = 0; c < 9; c++) {
         let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
         let col = (b % 3) * 3 + (c % 3);
-        grid9x9[r][col] = boardData[b][c];
+        grid[r][col] = boardData[b][c];
       }
     }
-
-    const res = evaluateGrokMoveV4(grid9x9, myColor, seasonInfo);
-
-    let rawR = res.place.b;
-    let rawC = res.place.c;
-    let targetB = Math.floor(rawR / 3) * 3 + Math.floor(rawC / 3);
-    let targetC = (rawR % 3) * 3 + (rawC % 3);
-
-    // Grokが指定したスライド情報を Nine Topology 形式へ変換
-    let slideObj = null;
-    if (res.slide && res.slide.b !== undefined) {
-      // Grokの計算したブロック指定を0〜8のブロックIDに補正
-      let grokBlock = Math.floor(res.slide.b / 3) * 3; 
-      if (!slideLockedBlocks.includes(grokBlock) && emptyCount > 15) {
-        slideObj = { block: grokBlock, dir: res.slide.dir };
-      }
-    }
-
-    return { place: { b: targetB, c: targetC }, slide: slideObj };
+    return grid;
   }
 
+  function set9x9GridToBoard(grid, boardData) {
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        let b = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+        let cell = (r % 3) * 3 + (c % 3);
+        boardData[b][cell] = grid[r][c];
+      }
+    }
+  }
+
+  // 特定の連（グループ）の呼吸点（空きマス数）を探索
+  function getGroupLiberties(grid, startR, startC, visited) {
+    const targetType = grid[startR][startC];
+    if (!targetType || targetType === 'red') return { group: [], liberties: 0 };
+
+    let group = [];
+    let liberties = new Set();
+    let queue = [[startR, startC]];
+    visited[startR][startC] = true;
+
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+
+    while (queue.length > 0) {
+      let [r, c] = queue.shift();
+      group.push({ r, c });
+
+      for (let i = 0; i < 4; i++) {
+        let nr = r + dr[i];
+        let nc = c + dc[i];
+
+        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+          let neighbor = grid[nr][nc];
+          if (neighbor === null || neighbor === 'blue-reserved') {
+            liberties.add(`${nr},${nc}`);
+          } else if (neighbor === targetType && !visited[nr][nc]) {
+            visited[nr][nc] = true;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+    }
+    return { group, liberties: liberties.size };
+  }
+
+  // 盤面全体をスキャンし、呼吸点0のグループを捕獲（パージ）
+  function processCaptures(grid, capturer) {
+    let visited = Array.from({length: 9}, () => Array(9).fill(false));
+    let capturedStones = [];
+    let pointsGained = 0;
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        let stone = grid[r][c];
+        if (stone && stone !== 'red' && stone !== 'blue-reserved' && !visited[r][c]) {
+          let res = getGroupLiberties(grid, r, c, visited);
+          if (res.liberties === 0) {
+            // 呼吸点ゼロ -> 捕獲成立！
+            res.group.forEach(pos => {
+              capturedStones.push(pos);
+              let st = grid[pos.r][pos.c];
+              if (st === 'blue') pointsGained += 2; // 青石は2点
+              else pointsGained += 1;               // 通常石は1点
+            });
+          }
+        }
+      }
+    }
+
+    // 捕獲された石を盤面から消去
+    capturedStones.forEach(pos => {
+      grid[pos.r][pos.c] = null;
+    });
+
+    if (pointsGained > 0 && capturer) {
+      playerScores[capturer] += pointsGained;
+      logMessage(`【捕獲発生】${capturer === 'white' ? '白' : '黒'} が敵石をパージ！ (+${pointsGained} pt)`);
+    }
+
+    return capturedStones.length;
+  }
+
+  // 自殺手チェック (石を置いた時に相手を捕獲できず、自分の呼吸点も0になるか)
+  function isSuicideMove(b, c, playerColor) {
+    let tempGrid = get9x9Grid(board);
+    let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+    let col = (b % 3) * 3 + (c % 3);
+
+    tempGrid[r][col] = playerColor;
+
+    // 1. まず配置によって相手石が捕獲できるか試行
+    let opponentColor = playerColor === 'white' ? 'black' : 'white';
+    let visitedOpp = Array.from({length: 9}, () => Array(9).fill(false));
+    let opponentCaptured = false;
+
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+    for (let i = 0; i < 4; i++) {
+      let nr = r + dr[i], nc = col + dc[i];
+      if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+        if (tempGrid[nr][nc] === opponentColor && !visitedOpp[nr][nc]) {
+          let res = getGroupLiberties(tempGrid, nr, nc, visitedOpp);
+          if (res.liberties === 0) {
+            opponentCaptured = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (opponentCaptured) return false; // 相手を取れるなら自殺手ではない
+
+    // 2. 自分の呼吸点チェック
+    let visitedSelf = Array.from({length: 9}, () => Array(9).fill(false));
+    let selfRes = getGroupLiberties(tempGrid, r, col, visitedSelf);
+    return selfRes.liberties === 0; // 呼吸点0なら自殺手
+  }
+
+  /* ========================================================
+     ゲーム進行 ＆ イベント処理
+     ======================================================== */
   function saveBoardSnapshot() {
     boardSnapshots.push({ turn: turnNumber, board: board.map(arr => [...arr]) });
   }
@@ -190,28 +275,321 @@
     currentTurnMove = { place: null, slide: null, event: null };
   }
 
+  function countEmptyCells() {
+    let count = 0;
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) count++;
+    return count;
+  }
+
+  function updateStatusPanel() {
+    emptyCount = countEmptyCells();
+
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)';
+    document.getElementById('turn-count').innerText = turnNumber;
+    document.getElementById('empty-count').innerText = emptyCount;
+    document.getElementById('score-p1').innerText = `${playerScores.white} pt`;
+    document.getElementById('score-p2').innerText = `${playerScores.black} pt`;
+    document.getElementById('wall-p1').innerText = wallCount.white;
+    document.getElementById('wall-p2').innerText = wallCount.black;
+
+    const lockStatusEl = document.getElementById('slide-lock-status');
+    const instructionEl = document.getElementById('phase-instruction');
+
+    if (gamePhase === 'setup') {
+      lockStatusEl.innerText = "準備フェーズ";
+      instructionEl.innerText = "【準備フェーズ】四隅ブロックに各自初期石をデポジット中...";
+    } else if (gamePhase === 'place') {
+      lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
+      instructionEl.innerText = "【配置フェーズ】石を配置して呼吸点を包囲してください";
+    } else if (gamePhase === 'slide') {
+      lockStatusEl.innerText = "スライド選択待ち";
+      instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
+    }
+  }
+
+  function isValidPlaceTarget(b, c) {
+    if (board[b][c] !== null) return false;
+    if (gamePhase === 'setup') {
+      if (!CORNER_BLOCKS.includes(b)) return false;
+      if (board[b].some(stone => stone === currentPlayer)) return false;
+      return true;
+    } else if (gamePhase === 'place') {
+      // 自殺手の検証
+      if (isSuicideMove(b, c, currentPlayer)) return false;
+      return true;
+    }
+    return false;
+  }
+
+  function handleCellClick(b, c) {
+    if (gamePhase === 'setup') {
+      if (!isValidPlaceTarget(b, c)) return;
+      board[b][c] = currentPlayer;
+      setupCount++;
+      if (setupCount === 4) {
+        gamePhase = 'place';
+        checkBlueStoneDrop();
+      }
+      currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+      renderBoard();
+    } else if (gamePhase === 'place') {
+      if (!isValidPlaceTarget(b, c)) return;
+
+      const cellCoord = CELL_NAMES[c];
+      if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
+        board[b][c] = 'red';
+        wallCount[currentPlayer]--;
+        isWallDeclarationActive = false;
+        currentTurnMove.place = `+B${b+1}-${cellCoord}(RED)`;
+        logMessage(`${currentPlayer === 'white' ? '白' : '黒'}が赤石（絶対障壁）を設置！`);
+      } else {
+        board[b][c] = currentPlayer;
+        currentTurnMove.place = `+B${b+1}-${cellCoord}`;
+      }
+
+      // 1. 配置による呼吸点・捕獲の判定
+      let grid = get9x9Grid(board);
+      let capturedCount = processCaptures(grid, currentPlayer);
+      set9x9GridToBoard(grid, board);
+
+      emptyCount = countEmptyCells();
+
+      // 2. 仕様ルール: 配置で捕獲が発生した場合はスライドなしでターン終了
+      if (capturedCount > 0) {
+        logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
+        currentTurnMove.slide = null;
+        commitTurnMove();
+        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+        gamePhase = 'place';
+        checkBlueStoneDrop();
+      } else if (emptyCount <= 15) {
+        commitTurnMove();
+        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+        gamePhase = 'place';
+        checkBlueStoneDrop();
+      } else {
+        gamePhase = 'slide';
+      }
+      renderBoard();
+    }
+  }
+
+  function executeSlide(b, direction) {
+    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
+    const block = board[b];
+
+    if (direction === 'right') {
+      let t0 = block[2]; block[2] = block[1]; block[1] = block[0]; block[0] = t0;
+      let t1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = t1;
+      let t2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = t2;
+      currentTurnMove.slide = `>B${b+1}-R`;
+    } else if (direction === 'left') {
+      let t0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = t0;
+      let t1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = t1;
+      let t2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = t2;
+      currentTurnMove.slide = `>B${b+1}-L`;
+    } else if (direction === 'down') {
+      let t0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = t0;
+      let t1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = t1;
+      let t2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = t2;
+      currentTurnMove.slide = `>B${b+1}-D`;
+    } else if (direction === 'up') {
+      let t0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = t0;
+      let t1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = t1;
+      let t2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = t2;
+      currentTurnMove.slide = `>B${b+1}-U`;
+    }
+
+    // スライド後の捕獲判定（手番プレイヤー、及び同時捕獲の両方を解決）
+    let grid = get9x9Grid(board);
+    let opponentColor = currentPlayer === 'white' ? 'black' : 'white';
+    processCaptures(grid, currentPlayer);  // 手番プレイヤーの加点
+    processCaptures(grid, opponentColor); // 相手の加点（巻き添え捕獲）
+    set9x9GridToBoard(grid, board);
+
+    commitTurnMove();
+    slideLockedBlocks = [b];
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    checkBlueStoneDrop();
+    renderBoard();
+  }
+
+  function skipSlide() {
+    if (gamePhase !== 'slide') return;
+    currentTurnMove.slide = null;
+    commitTurnMove();
+    slideLockedBlocks = [];
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    checkBlueStoneDrop();
+    renderBoard();
+  }
+
+  function renderBoard() {
+    const container = document.getElementById('board-container');
+    container.innerHTML = '';
+
+    for (let b = 0; b < 9; b++) {
+      const blockEl = document.createElement('div');
+      blockEl.className = 'block';
+
+      if (slideLockedBlocks.includes(b)) blockEl.classList.add('locked');
+
+      for (let c = 0; c < 9; c++) {
+        const cellEl = document.createElement('div');
+        cellEl.className = 'cell';
+
+        const stoneType = board[b][c];
+        if (stoneType) {
+          const stoneEl = document.createElement('div');
+          stoneEl.className = `stone ${stoneType}`;
+          cellEl.appendChild(stoneEl);
+        }
+
+        blockEl.appendChild(cellEl);
+      }
+      container.appendChild(blockEl);
+    }
+    updateStatusPanel();
+  }
+
+  /* === 自動対局用簡易テストBOT === */
+  class NineTopologyRestoredTestBot {
+    constructor(speedMs = 30) {
+      this.speedMs = speedMs;
+      this.intervalId = null;
+      this.moveCount = 0;
+      this.maxMoves = 250;
+    }
+
+    start() {
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【対局中】全自動対局進行中...";
+        btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
+      }
+      logMessage("【BOT対局開始】v2.0r 復元型ロジック自動検証スタート！");
+      this.moveCount = 0;
+      this.intervalId = setInterval(() => {
+        try { this.step(); } 
+        catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
+      }, this.speedMs);
+    }
+
+    stop() {
+      if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【全自動対局】開始 / 停止";
+        btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
+      }
+      logMessage("【対局停止】シミュレーションを停止しました。");
+    }
+
+    step() {
+      this.moveCount++;
+      if (this.moveCount > this.maxMoves) {
+        this.stop();
+        logMessage("【安全停止】最大手数に到達しました。");
+        return;
+      }
+
+      if (gamePhase === 'setup') {
+        const validTargets = [];
+        for (let b of CORNER_BLOCKS) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'place') {
+        const validTargets = [];
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+
+        if (validTargets.length === 0) {
+          if (emptyCount === 0) {
+            this.stop();
+            let result = "引き分け";
+            if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
+            else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
+
+            logMessage(`【対局決着】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
+            return;
+          }
+          skipSlide();
+          return;
+        }
+
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'slide') {
+        if (Math.random() < 0.4) {
+          skipSlide();
+          return;
+        }
+
+        const availableBlocks = [];
+        for (let b = 0; b < 9; b++) {
+          if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
+        }
+
+        if (availableBlocks.length === 0) {
+          skipSlide();
+          return;
+        }
+
+        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+        const dirs = ['up', 'down', 'left', 'right'];
+        executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
+        return;
+      }
+    }
+  }
+
+  const testBot = new NineTopologyRestoredTestBot(30);
+
+  function toggleTestBot() {
+    if (testBot.intervalId) {
+      testBot.stop();
+    } else {
+      testBot.start();
+    }
+  }
+
   function downloadNtpnFile() {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
-    const scores = calculateScores();
     let resultStr = "IN_PROGRESS";
     if (emptyCount === 0 || gamePhase === 'gameover') {
-      if (scores.whiteScore > scores.blackScore) resultStr = "1-0";
-      else if (scores.blackScore > scores.whiteScore) resultStr = "0-1";
+      if (playerScores.white > playerScores.black) resultStr = "1-0";
+      else if (playerScores.black > playerScores.white) resultStr = "0-1";
       else resultStr = "1/2-1/2";
     }
 
-    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "[Tokikagura] Test_Bot_A.ntai"]\n[Black "[xAI] Grok_v4.ntai"]\n[Result "${resultStr}"]\n\n`;
+    let ntpnContent = `[Game "Nine Topology"]\n[Date "${dateStr}"]\n[White "[Tokikagura] Restored_Bot_A.ntai"]\n[Black "[Tokikagura] Restored_Bot_B.ntai"]\n[Result "${resultStr}"]\n\n`;
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
 
     const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_vsGrok_v4_NineTopology.ntpn`;
+    a.download = `NTPN_Restored_v2.0r_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
-    logMessage(`対戦記譜をローカルへ保存完了！`);
+    logMessage(`対戦記譜(.ntpn)を保存完了！`);
   }
 
   function generateHighlightGIF() {
@@ -232,7 +610,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_vsGrok_v4_Highlight.gif`;
+      a.download = `NineTopology_v2.0r_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
@@ -271,339 +649,6 @@
           ctx.fill();
         }
       }
-    }
-  }
-
-  function calculateScores() {
-    let whiteScore = 0, blackScore = 0;
-    const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-    for (let b = 0; b < 9; b++) {
-      lines.forEach(line => {
-        const s1 = board[b][line[0]], s2 = board[b][line[1]], s3 = board[b][line[2]];
-        if (s1 && s1 === s2 && s2 === s3) {
-          if (s1 === 'white') whiteScore++;
-          if (s1 === 'black') blackScore++;
-        }
-      });
-    }
-    return { whiteScore, blackScore };
-  }
-
-  function countEmptyCells() {
-    let count = 0;
-    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) count++;
-    return count;
-  }
-
-  function updateStatusPanel() {
-    const scores = calculateScores();
-    emptyCount = countEmptyCells();
-
-    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白/BOT)' : '後手 (黒/Grok v4)';
-    document.getElementById('turn-count').innerText = turnNumber;
-    document.getElementById('empty-count').innerText = emptyCount;
-    document.getElementById('score-p1').innerText = scores.whiteScore;
-    document.getElementById('score-p2').innerText = scores.blackScore;
-    document.getElementById('wall-p1').innerText = wallCount.white;
-    document.getElementById('wall-p2').innerText = wallCount.black;
-
-    const lockStatusEl = document.getElementById('slide-lock-status');
-    const instructionEl = document.getElementById('phase-instruction');
-
-    if (gamePhase === 'setup') {
-      lockStatusEl.innerText = "準備フェーズ";
-      instructionEl.innerText = "【準備フェーズ】四隅のブロック(B1, B3, B7, B9)に両BOTが石を配置中...";
-    } else if (gamePhase === 'place') {
-      lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
-      instructionEl.innerText = "【配置フェーズ】思考ロジックに従い石を自動配置中...";
-    } else if (gamePhase === 'slide') {
-      lockStatusEl.innerText = "スライド選択待ち";
-      instructionEl.innerText = "【スライドフェーズ】ブロックのスライド処理を実行中...";
-    }
-  }
-
-  function isValidPlaceTarget(b, c) {
-    if (board[b][c] !== null) return false;
-    if (gamePhase === 'setup') {
-      if (!CORNER_BLOCKS.includes(b)) return false;
-      if (board[b].some(stone => stone === currentPlayer)) return false;
-      return true;
-    } else if (gamePhase === 'place') {
-      return true;
-    }
-    return false;
-  }
-
-  function handleCellClick(b, c) {
-    if (gamePhase === 'setup') {
-      if (!isValidPlaceTarget(b, c)) return;
-      board[b][c] = currentPlayer;
-      setupCount++;
-      if (setupCount === 4) {
-        gamePhase = 'place';
-        checkBlueStoneDrop();
-      }
-      currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-      renderBoard();
-    } else if (gamePhase === 'place') {
-      if (!isValidPlaceTarget(b, c)) return;
-
-      const cellCoord = CELL_NAMES[c];
-      if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
-        board[b][c] = 'red';
-        wallCount[currentPlayer]--;
-        isWallDeclarationActive = false;
-        currentTurnMove.place = `+B${b+1}-${cellCoord}(RED)`;
-        logMessage(`${currentPlayer === 'white' ? '白' : '黒'}が赤石（絶対障壁）を設置！`);
-      } else {
-        board[b][c] = currentPlayer;
-        currentTurnMove.place = `+B${b+1}-${cellCoord}`;
-      }
-
-      emptyCount = countEmptyCells();
-      if (emptyCount <= 15) {
-        commitTurnMove();
-        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-        gamePhase = 'place';
-        checkBlueStoneDrop();
-      } else {
-        gamePhase = 'slide';
-      }
-      renderBoard();
-    }
-  }
-
-  function executeSlide(b, direction) {
-    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
-    const block = board[b];
-
-    if (direction === 'right') {
-      let t0 = block[2]; block[2] = block[1]; block[1] = block[0]; block[0] = t0;
-      let t1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = t1;
-      let t2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = t2;
-      currentTurnMove.slide = `>B${b+1}-R`;
-    } else if (direction === 'left') {
-      let t0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = t0;
-      let t1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = t1;
-      let t2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = t2;
-      currentTurnMove.slide = `>B${b+1}-L`;
-    } else if (direction === 'down') {
-      let t0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = t0;
-      let t1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = t1;
-      let t2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = t2;
-      currentTurnMove.slide = `>B${b+1}-D`;
-    } else if (direction === 'up') {
-      let t0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = t0;
-      let t1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = t1;
-      let t2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = t2;
-      currentTurnMove.slide = `>B${b+1}-U`;
-    }
-
-    commitTurnMove();
-    slideLockedBlocks = [b];
-    selectedBlock = null;
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    checkBlueStoneDrop();
-    renderBoard();
-  }
-
-  function skipSlide() {
-    if (gamePhase !== 'slide') return;
-    currentTurnMove.slide = null;
-    commitTurnMove();
-    slideLockedBlocks = [];
-    selectedBlock = null;
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    checkBlueStoneDrop();
-    renderBoard();
-  }
-
-  function renderBoard() {
-    const container = document.getElementById('board-container');
-    container.innerHTML = '';
-
-    for (let b = 0; b < 9; b++) {
-      const blockEl = document.createElement('div');
-      blockEl.className = 'block';
-
-      if (slideLockedBlocks.includes(b)) blockEl.classList.add('locked');
-
-      for (let c = 0; c < 9; c++) {
-        const cellEl = document.createElement('div');
-        cellEl.className = 'cell';
-
-        const stoneType = board[b][c];
-        if (stoneType) {
-          const stoneEl = document.createElement('div');
-          stoneEl.className = `stone ${stoneType}`;
-          cellEl.appendChild(stoneEl);
-        }
-
-        blockEl.appendChild(cellEl);
-      }
-      container.appendChild(blockEl);
-    }
-    updateStatusPanel();
-  }
-
-  /* === 全自動シミュレーション BOT エンジン === */
-  class NineTopologyGrokBattleBot {
-    constructor(speedMs = 30) {
-      this.speedMs = speedMs;
-      this.intervalId = null;
-      this.moveCount = 0;
-      this.maxMoves = 250;
-      this.lastGrokSlide = null;
-    }
-
-    start() {
-      const btn = document.getElementById('btn-toggle-bot');
-      if (btn) {
-        btn.innerText = "【対局中】全自動対局進行中...";
-        btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
-      }
-      logMessage("【BOT対局開始】白(従来BOT) vs 黒(Grok v4) 対局検証始動！");
-      this.moveCount = 0;
-      this.lastGrokSlide = null;
-      this.intervalId = setInterval(() => {
-        try { this.step(); } 
-        catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
-      }, this.speedMs);
-    }
-
-    stop() {
-      if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
-      const btn = document.getElementById('btn-toggle-bot');
-      if (btn) {
-        btn.innerText = "【BOT vs Grok v4】全自動対局開始";
-        btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
-      }
-      logMessage("【対局停止】シミュレーションを停止しました。");
-    }
-
-    step() {
-      this.moveCount++;
-      if (this.moveCount > this.maxMoves) {
-        this.stop();
-        logMessage("【安全停止】最大手数に到達しました。");
-        return;
-      }
-
-      // 1. 準備フェーズ
-      if (gamePhase === 'setup') {
-        const validTargets = [];
-        for (let b of CORNER_BLOCKS) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-          }
-        }
-        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
-        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
-        handleCellClick(choice.b, choice.c);
-        return;
-      }
-
-      // 2. 配置フェーズ
-      if (gamePhase === 'place') {
-        if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
-          isWallDeclarationActive = true;
-        } else {
-          isWallDeclarationActive = false;
-        }
-
-        let choice = null;
-
-        if (currentPlayer === 'black') {
-          // 黒（Grok v4）の着手判断
-          const seasonInfo = {
-            reservedPos: { b: 2, c: 4 }, // B3-b2
-            isDropped: blueStoneDropped,
-            bonusMultiplier: 2.0
-          };
-          const res = getGrokV4MoveWrapped(board, 'black', seasonInfo);
-          if (isValidPlaceTarget(res.place.b, res.place.c)) {
-            choice = res.place;
-          }
-          this.lastGrokSlide = res.slide; // スライド命令を一時保持
-        }
-
-        // フォールバック（通常ランダム選択）
-        if (!choice) {
-          const validTargets = [];
-          for (let b = 0; b < 9; b++) {
-            for (let c = 0; c < 9; c++) {
-              if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-            }
-          }
-
-          if (validTargets.length === 0) {
-            if (emptyCount === 0) {
-              this.stop();
-              const scores = calculateScores();
-              let result = "引き分け";
-              if (scores.whiteScore > scores.blackScore) result = "先手 (白/従来BOT) の勝利！";
-              else if (scores.blackScore > scores.whiteScore) result = "後手 (黒/Grok v4) の勝利！";
-
-              logMessage(`【対局決着】${result} (白:${scores.whiteScore} - 黒Grok:${scores.blackScore})`);
-              return;
-            }
-            throw new Error("配置可能マス不渡り");
-          }
-          choice = validTargets[Math.floor(Math.random() * validTargets.length)];
-        }
-
-        handleCellClick(choice.b, choice.c);
-        return;
-      }
-
-      // 3. スライドフェーズ
-      if (gamePhase === 'slide') {
-        if (emptyCount <= 15) throw new Error("空き15以下スライドエラー");
-
-        if (currentPlayer === 'black') {
-          // Grok v4 の指定スライドを実行（可能であれば）
-          if (this.lastGrokSlide && !slideLockedBlocks.includes(this.lastGrokSlide.block)) {
-            executeSlide(this.lastGrokSlide.block, this.lastGrokSlide.dir);
-            this.lastGrokSlide = null;
-            return;
-          }
-          skipSlide();
-          return;
-        }
-
-        // 白（従来BOT）はランダムスライド
-        if (Math.random() < 0.3) {
-          skipSlide();
-          return;
-        }
-
-        const availableBlocks = [];
-        for (let b = 0; b < 9; b++) {
-          if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
-        }
-
-        if (availableBlocks.length === 0) {
-          skipSlide();
-          return;
-        }
-
-        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-        const dirs = ['up', 'down', 'left', 'right'];
-        executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
-        return;
-      }
-    }
-  }
-
-  const testBot = new NineTopologyGrokBattleBot(30);
-
-  function toggleTestBot() {
-    if (testBot.intervalId) {
-      testBot.stop();
-    } else {
-      testBot.start();
     }
   }
 </script>
