@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.0r (Capture Engine Restored)</title>
+<title>Nine Topology v2.0r1 (Capture Engine Fixed)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,7 +27,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.0r (呼吸点捕獲復元版)</h1>
+<h1>NINE TOPOLOGY v2.0r1 (捕獲判定修正版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -35,7 +35,7 @@
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
-  <div id="phase-instruction">【検証モード】v1.6 呼吸点・連捕獲復元プロトコル動作中</div>
+  <div id="phase-instruction">【検証モード】呼吸点包囲・石パージ修正アルゴリズム稼働中</div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【全自動対局】開始 / 停止</button>
     <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
@@ -94,12 +94,12 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.0r (呼吸点・キャプチャー型復元プロトコル) 準備完了。");
+    logMessage("システム起動 v2.0r1 (捕獲判定アルゴリズム完全修正) 準備完了。");
     renderBoard();
   }
 
   /* ========================================================
-     【コア復元エンジン】9x9 トポロジー & 呼吸点・捕獲ロジック
+     【修正版コアエンジン】9x9 呼吸点・グループ探索・パージ処理
      ======================================================== */
   function get9x9Grid(boardData) {
     let grid = Array.from({length: 9}, () => Array(9).fill(null));
@@ -123,10 +123,12 @@
     }
   }
 
-  // 特定の連（グループ）の呼吸点（空きマス数）を探索
+  // グループ探索＆厳密な呼吸点算出
   function getGroupLiberties(grid, startR, startC, visited) {
     const targetType = grid[startR][startC];
-    if (!targetType || targetType === 'red') return { group: [], liberties: 0 };
+    if (!targetType || targetType === 'red' || targetType === 'blue-reserved') {
+      return { group: [], liberties: 99 };
+    }
 
     let group = [];
     let liberties = new Set();
@@ -144,58 +146,61 @@
         let nr = r + dr[i];
         let nc = c + dc[i];
 
+        // 盤面内チェック
         if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
           let neighbor = grid[nr][nc];
-          if (neighbor === null || neighbor === 'blue-reserved') {
-            liberties.add(`${nr},${nc}`);
+          if (neighbor === null) {
+            liberties.add(`${nr},${nc}`); // 空きマス＝呼吸点！
           } else if (neighbor === targetType && !visited[nr][nc]) {
             visited[nr][nc] = true;
             queue.push([nr, nc]);
           }
         }
+        // 盤外・赤石は呼吸点としてカウントしない（自動遮断）
       }
     }
     return { group, liberties: liberties.size };
   }
 
-  // 盤面全体をスキャンし、呼吸点0のグループを捕獲（パージ）
+  // 盤面全体の捕獲処理（相手石のパージ）
   function processCaptures(grid, capturer) {
+    let opponentColor = capturer === 'white' ? 'black' : 'white';
     let visited = Array.from({length: 9}, () => Array(9).fill(false));
-    let capturedStones = [];
+    let capturedPositions = [];
     let pointsGained = 0;
 
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
         let stone = grid[r][c];
-        if (stone && stone !== 'red' && stone !== 'blue-reserved' && !visited[r][c]) {
+        // 相手の石（または対象の青石）を判定
+        if ((stone === opponentColor || stone === 'blue') && !visited[r][c]) {
           let res = getGroupLiberties(grid, r, c, visited);
           if (res.liberties === 0) {
-            // 呼吸点ゼロ -> 捕獲成立！
             res.group.forEach(pos => {
-              capturedStones.push(pos);
+              capturedPositions.push(pos);
               let st = grid[pos.r][pos.c];
-              if (st === 'blue') pointsGained += 2; // 青石は2点
-              else pointsGained += 1;               // 通常石は1点
+              if (st === 'blue') pointsGained += 2;
+              else pointsGained += 1;
             });
           }
         }
       }
     }
 
-    // 捕獲された石を盤面から消去
-    capturedStones.forEach(pos => {
+    // 盤面から石を消去（回収）
+    capturedPositions.forEach(pos => {
       grid[pos.r][pos.c] = null;
     });
 
     if (pointsGained > 0 && capturer) {
       playerScores[capturer] += pointsGained;
-      logMessage(`【捕獲発生】${capturer === 'white' ? '白' : '黒'} が敵石をパージ！ (+${pointsGained} pt)`);
+      logMessage(`【捕獲成功】${capturer === 'white' ? '白' : '黒'} が敵石 ${capturedPositions.length}個 をパージ！ (+${pointsGained} pt)`);
     }
 
-    return capturedStones.length;
+    return capturedPositions.length;
   }
 
-  // 自殺手チェック (石を置いた時に相手を捕獲できず、自分の呼吸点も0になるか)
+  // 自殺手チェック
   function isSuicideMove(b, c, playerColor) {
     let tempGrid = get9x9Grid(board);
     let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
@@ -203,7 +208,7 @@
 
     tempGrid[r][col] = playerColor;
 
-    // 1. まず配置によって相手石が捕獲できるか試行
+    // 1. 配置によって相手石を捕獲できるか？
     let opponentColor = playerColor === 'white' ? 'black' : 'white';
     let visitedOpp = Array.from({length: 9}, () => Array(9).fill(false));
     let opponentCaptured = false;
@@ -213,7 +218,7 @@
     for (let i = 0; i < 4; i++) {
       let nr = r + dr[i], nc = col + dc[i];
       if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
-        if (tempGrid[nr][nc] === opponentColor && !visitedOpp[nr][nc]) {
+        if ((tempGrid[nr][nc] === opponentColor || tempGrid[nr][nc] === 'blue') && !visitedOpp[nr][nc]) {
           let res = getGroupLiberties(tempGrid, nr, nc, visitedOpp);
           if (res.liberties === 0) {
             opponentCaptured = true;
@@ -223,12 +228,12 @@
       }
     }
 
-    if (opponentCaptured) return false; // 相手を取れるなら自殺手ではない
+    if (opponentCaptured) return false; // 敵を取れるなら着手可能
 
-    // 2. 自分の呼吸点チェック
+    // 2. 自分の連の呼吸点が0になるか？
     let visitedSelf = Array.from({length: 9}, () => Array(9).fill(false));
     let selfRes = getGroupLiberties(tempGrid, r, col, visitedSelf);
-    return selfRes.liberties === 0; // 呼吸点0なら自殺手
+    return selfRes.liberties === 0;
   }
 
   /* ========================================================
@@ -314,7 +319,6 @@
       if (board[b].some(stone => stone === currentPlayer)) return false;
       return true;
     } else if (gamePhase === 'place') {
-      // 自殺手の検証
       if (isSuicideMove(b, c, currentPlayer)) return false;
       return true;
     }
@@ -354,7 +358,7 @@
 
       emptyCount = countEmptyCells();
 
-      // 2. 仕様ルール: 配置で捕獲が発生した場合はスライドなしでターン終了
+      // 2. 配置で捕獲が発生した場合はスライドなしでターン終了
       if (capturedCount > 0) {
         logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
         currentTurnMove.slide = null;
@@ -400,11 +404,11 @@
       currentTurnMove.slide = `>B${b+1}-U`;
     }
 
-    // スライド後の捕獲判定（手番プレイヤー、及び同時捕獲の両方を解決）
+    // スライド後の捕獲判定（手番プレイヤー、及び相手の巻き添え両方をチェック）
     let grid = get9x9Grid(board);
     let opponentColor = currentPlayer === 'white' ? 'black' : 'white';
-    processCaptures(grid, currentPlayer);  // 手番プレイヤーの加点
-    processCaptures(grid, opponentColor); // 相手の加点（巻き添え捕獲）
+    processCaptures(grid, currentPlayer);  
+    processCaptures(grid, opponentColor); 
     set9x9GridToBoard(grid, board);
 
     commitTurnMove();
@@ -469,7 +473,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.0r 復元型ロジック自動検証スタート！");
+      logMessage("【BOT対局開始】v2.0r1 修正アルゴリズムシミュレーションスタート！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
@@ -586,7 +590,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_Restored_v2.0r_NineTopology.ntpn`;
+    a.download = `NTPN_Restored_v2.0r1_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -610,7 +614,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v2.0r_Highlight.gif`;
+      a.download = `NineTopology_v2.0r1_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
