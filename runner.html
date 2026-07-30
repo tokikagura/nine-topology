@@ -39,10 +39,10 @@
 <div id="ntai-panel">
   <div class="section-title"><span>🤖 外部AI (.ntai) の読み込み</span></div>
   
-  <!-- ① ファイル選択/ドラッグ＆ドロップ エリア -->
+  <!-- ① ファイル選択/ドラッグ＆ドロップ エリア (accept属性を削除してiOSで選択可能に修正) -->
   <div id="file-drop-zone" onclick="triggerFileInput()">
     <span id="drop-zone-text">📁 タップして .ntai ファイルを選択<br><span style="font-size: 0.65rem; color: #a3bac3;">(またはここにファイルをドロップ)</span></span>
-    <input type="file" id="file-input" accept=".ntai,.js,.txt" onchange="handleFileSelect(event)">
+    <input type="file" id="file-input" onchange="handleFileSelect(event)">
   </div>
 
   <!-- ② テキスト直接貼り付け用（補助） -->
