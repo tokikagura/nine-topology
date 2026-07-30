@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.1e (NTAI & Slide Capture Fixed)</title>
+<title>Nine Topology v2.1f (Game Over Detection Fixed)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,7 +27,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.1e (完全修正版)</h1>
+<h1>NINE TOPOLOGY v2.1f (終局判定完全対応版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -57,7 +57,7 @@
   let playerScores = { white: 0, black: 0 };
   let slideLockedBlocks = [];
   let currentPlayer = 'white';
-  let gamePhase = 'setup';
+  let gamePhase = 'setup'; // 'setup' | 'place' | 'slide' | 'gameover'
   let setupCount = 0;
   let isWallDeclarationActive = false;
 
@@ -101,7 +101,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.1e (NTAI連動＆スライド捕獲修正版) 準備完了。");
+    logMessage("システム起動 v2.1f (終局判定完全対応版) 準備完了。");
     renderBoard();
   }
 
@@ -372,7 +372,7 @@
   function updateStatusPanel() {
     emptyCount = countEmptyCells();
 
-    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)';
+    document.getElementById('current-player').innerText = gamePhase === 'gameover' ? '終局' : (currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)');
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = `${playerScores.white} pt`;
@@ -396,6 +396,13 @@
       lockStatusEl.innerText = "スライド選択待ち";
       instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
       if (skipBtn) skipBtn.disabled = false;
+    } else if (gamePhase === 'gameover') {
+      lockStatusEl.innerText = "対局終了 (終局)";
+      let resText = "引き分け";
+      if (playerScores.white > playerScores.black) resText = "先手 (白) の捕獲勝利！";
+      else if (playerScores.black > playerScores.white) resText = "後手 (黒) の捕獲勝利！";
+      instructionEl.innerText = `【終局】${resText}`;
+      if (skipBtn) skipBtn.disabled = true;
     }
   }
 
@@ -414,6 +421,8 @@
   }
 
   function handleCellClick(b, c) {
+    if (gamePhase === 'gameover') return;
+
     if (gamePhase === 'setup') {
       if (!isValidPlaceTarget(b, c)) return;
       board[b][c] = currentPlayer;
@@ -566,7 +575,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.1e スタート！");
+      logMessage("【BOT対局開始】v2.1f スタート！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
@@ -585,6 +594,11 @@
     }
 
     step() {
+      if (gamePhase === 'gameover') {
+        this.stop();
+        return;
+      }
+
       this.moveCount++;
       if (this.moveCount > this.maxMoves) {
         this.stop();
@@ -592,7 +606,6 @@
         return;
       }
 
-      // 1. 外部注入された NTAI エンジンの検索
       let engine = currentPlayer === 'white' ? window.NTAI_Engine_White : window.NTAI_Engine_Black;
       if (!engine) engine = window.NTAI_Engine;
 
@@ -618,6 +631,28 @@
       }
 
       if (gamePhase === 'place') {
+        // 1. 合法手（置けるマス）の存在チェック
+        const validTargets = [];
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+
+        // 打てる手が存在しない（詰み）場合 ➔ 即時ゲームセット（強制終局）
+        if (validTargets.length === 0) {
+          gamePhase = 'gameover';
+          this.stop();
+          let result = "引き分け";
+          if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
+          else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
+
+          logMessage(`【対局決着（打つ手なし・終局）】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
+          updateStatusPanel();
+          return;
+        }
+
+        // 外部AIエンジン思考呼び出し
         if (engine && typeof engine.decideNextMove === 'function') {
           const gameState = { player: currentPlayer, phase: gamePhase, redWallsLeft: wallCount[currentPlayer] };
           const res = engine.decideNextMove(board, gameState);
@@ -632,23 +667,6 @@
           isWallDeclarationActive = true;
         } else {
           isWallDeclarationActive = false;
-        }
-
-        const validTargets = [];
-        for (let b = 0; b < 9; b++) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-          }
-        }
-
-        if (validTargets.length === 0) {
-          this.stop();
-          let result = "引き分け";
-          if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
-          else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
-
-          logMessage(`【対局決着（詰み）】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
-          return;
         }
 
         const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
@@ -723,7 +741,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_Restored_v2.1e_NineTopology.ntpn`;
+    a.download = `NTPN_Restored_v2.1f_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -747,7 +765,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v2.1e_Highlight.gif`;
+      a.download = `NineTopology_v2.1f_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
