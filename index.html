@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.0r4 (BOT Trace Diagnostic Edition)</title>
+<title>Nine Topology v2.5b</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5a</h1>
+<h1>NINE TOPOLOGY v2.5b</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -113,7 +113,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.5a 準備完了。");
+    logMessage("システム起動 v2.5b 準備完了。");
     renderBoard();
   }
 
@@ -736,21 +736,28 @@
     }
   }
 
-  function fillsOwnBlockCompletely(b, c, playerColor) {
-    if (board[b][c] !== null && board[b][c] !== 'blue-reserved') return false;
-    for (let i = 0; i < 9; i++) {
-      if (i === c) continue;
-      if (board[b][i] !== playerColor) return false;
-    }
-    return true;
+  function countOwnStonesInBlock(blockIndex, playerColor) {
+    return board[blockIndex].reduce((count, cell) => count + (cell === playerColor ? 1 : 0), 0);
   }
 
   function chooseBuiltInPlacement(validTargets) {
-    const saferTargets = validTargets.filter(({ b, c }) => !fillsOwnBlockCompletely(b, c, currentPlayer));
-    const pool = saferTargets.length > 0 ? saferTargets : validTargets;
-    if (saferTargets.length < validTargets.length) {
-      logMessage(`【BOT評価】自軍9マス埋めロック候補を${validTargets.length - saferTargets.length}手除外`);
+    // 赤石は自軍石の団子化に加わらないため、通常どおり候補から選ぶ。
+    if (isWallDeclarationActive) {
+      return validTargets[Math.floor(Math.random() * validTargets.length)];
     }
+
+    // 自軍石がすでに7個以上あるブロックへの追加配置を強く避ける。
+    // 他に合法手がない場合だけ、そのブロックも候補へ戻す。
+    const saferTargets = validTargets.filter(({ b }) => countOwnStonesInBlock(b, currentPlayer) < 7);
+    const pool = saferTargets.length > 0 ? saferTargets : validTargets;
+
+    const avoided = validTargets.length - saferTargets.length;
+    if (avoided > 0 && saferTargets.length > 0) {
+      logMessage(`【BOT評価】自軍石7個以上の密集ブロック候補を${avoided}手回避`);
+    } else if (avoided > 0) {
+      logMessage('【BOT評価】全合法手が密集ブロック内のため回避制限を解除');
+    }
+
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
@@ -769,7 +776,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.5a スタート！");
+      logMessage("【BOT対局開始】v2.5b スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -952,7 +959,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v1.0r4_NineTopology.ntpn`;
+    a.download = `NTPN_v2.5b_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
