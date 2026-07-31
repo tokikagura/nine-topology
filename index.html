@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.5f</title>
+<title>Nine Topology v2.5g</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5f</h1>
+<h1>NINE TOPOLOGY v2.5g</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -248,6 +248,20 @@
 
     logMessage(`【15個捕獲決着】${resultText}（${captureSummary}）`);
     if (testBot && testBot.intervalId) testBot.stop('15個以上の一括捕獲で決着');
+  }
+
+  function finishByNoLegalMove(reason = '合法な配置手なし') {
+    if (gamePhase === 'gameover') return;
+    gamePhase = 'gameover';
+    isWallDeclarationActive = false;
+
+    let resultText = '引き分け';
+    if (playerScores.white > playerScores.black) resultText = '白の勝利';
+    else if (playerScores.black > playerScores.white) resultText = '黒の勝利';
+
+    logMessage(`【合法手なし決着】${reason}。${resultText}（白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
+    if (testBot && testBot.intervalId) testBot.stop('合法な配置手がないため得点判定');
+    renderBoard();
   }
 
   function finishByTurnLimit() {
@@ -907,16 +921,10 @@
         }
 
         if (validTargets.length === 0) {
-          if (emptyCount === 0) {
-            this.stop();
-            let result = "引き分け";
-            if (playerScores.white > playerScores.black) result = `${startingPlayer === 'white' ? '先手' : '後手'} (白) の捕獲勝利！`;
-            else if (playerScores.black > playerScores.white) result = `${startingPlayer === 'black' ? '先手' : '後手'} (黒) の捕獲勝利！`;
-
-            logMessage(`【対局決着】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
-            return;
-          }
-          skipSlide();
+          // v2.5g: PLACE中に合法手がない状態でskipSlide()を呼ぶと何も起きず、
+          // 同じ手番・同じターンを永久反復していた。ここで得点判定して終局する。
+          const sideName = currentPlayer === 'white' ? '白' : '黒';
+          finishByNoLegalMove(`${sideName}に合法な配置手がありません`);
           return;
         }
 
