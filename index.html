@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.0r3 (Red Wall System Added)</title>
+<title>Nine Topology v1.0r (Restored Capture Edition)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,7 +27,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.0r3 (赤石障壁完全実装版)</h1>
+<h1>NINE TOPOLOGY v1.0r (捕獲同時判定復元版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -101,7 +101,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.0r3 (赤石障壁2T後出現プロトコル実装) 準備完了。");
+    logMessage("システム起動 v1.0r (捕獲同時判定復元版) 準備完了。");
     renderBoard();
   }
 
@@ -130,10 +130,9 @@
         if (board[res.b][res.c] === null || board[res.b][res.c] === 'blue-reserved') {
           board[res.b][res.c] = 'red';
           logMessage(`【環境イベント】${res.player === 'white' ? '白' : '黒'}が申告した【赤石（絶対障壁）】が B${res.b+1}-${CELL_NAMES[res.c]} に出現！`);
-          // 出現による呼吸点遮断・捕獲チェック
+          // 出現による呼吸点遮断・捕獲チェック（同一盤面から同時判定）
           let grid = get9x9Grid(board);
-          processCaptures(grid, 'white', false);
-          processCaptures(grid, 'black', false);
+          resolveAllCapturesSimultaneously(grid, res.player, false);
           set9x9GridToBoard(grid, board);
         } else {
           logMessage(`【不渡り】${res.player === 'white' ? '白' : '黒'}が申告した赤石の出現位置が埋まっていたため設置失敗。`);
@@ -204,25 +203,72 @@
     return { group, liberties: liberties.size };
   }
 
+  function detectCapturedGroups(grid) {
+    let checked = Array.from({length: 9}, () => Array(9).fill(false));
+    let groups = [];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const stone = grid[r][c];
+        if ((stone === 'white' || stone === 'black' || stone === 'blue') && !checked[r][c]) {
+          const res = getGroupLiberties(grid, r, c);
+          res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
+          if (res.liberties === 0) {
+            groups.push({ stone, positions: res.group });
+          }
+        }
+      }
+    }
+    return groups;
+  }
+
+  function resolveAllCapturesSimultaneously(grid, eventOwner = null, isSuicideCheck = false) {
+    const groups = detectCapturedGroups(grid);
+    if (groups.length === 0) return 0;
+
+    const scoreDelta = { white: 0, black: 0 };
+    const capturedCount = { white: 0, black: 0, blue: 0 };
+
+    // 判定が終わるまで盤面を変更しない。これで白・黒の処理順による偏りを消す。
+    for (const group of groups) {
+      const count = group.positions.length;
+      capturedCount[group.stone] += count;
+
+      if (group.stone === 'white') scoreDelta.black += count;
+      else if (group.stone === 'black') scoreDelta.white += count;
+      else if (group.stone === 'blue' && eventOwner) scoreDelta[eventOwner] += count * 2;
+    }
+
+    for (const group of groups) {
+      group.positions.forEach(pos => { grid[pos.r][pos.c] = null; });
+    }
+
+    playerScores.white += scoreDelta.white;
+    playerScores.black += scoreDelta.black;
+
+    const typeStr = isSuicideCheck ? '自滅パージ' : '同時捕獲';
+    if (scoreDelta.white > 0) logMessage(`【${typeStr}】白 が +${scoreDelta.white} pt を獲得`);
+    if (scoreDelta.black > 0) logMessage(`【${typeStr}】黒 が +${scoreDelta.black} pt を獲得`);
+
+    return groups.reduce((sum, group) => sum + group.positions.length, 0);
+  }
+
   function processCaptures(grid, capturer, isSuicideCheck = false) {
-    let targetColor = capturer === 'white' ? 'black' : 'white';
+    const targetColor = capturer === 'white' ? 'black' : 'white';
     let checked = Array.from({length: 9}, () => Array(9).fill(false));
     let capturedPositions = [];
     let pointsGained = 0;
 
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
-        let stone = grid[r][c];
+        const stone = grid[r][c];
         if ((stone === targetColor || stone === 'blue') && !checked[r][c]) {
-          let res = getGroupLiberties(grid, r, c);
+          const res = getGroupLiberties(grid, r, c);
           res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
-
           if (res.liberties === 0) {
             res.group.forEach(pos => {
               capturedPositions.push(pos);
-              let st = grid[pos.r][pos.c];
-              if (st === 'blue') pointsGained += 2;
-              else pointsGained += 1;
+              pointsGained += grid[pos.r][pos.c] === 'blue' ? 2 : 1;
             });
           }
         }
@@ -230,13 +276,11 @@
     }
 
     capturedPositions.forEach(pos => { grid[pos.r][pos.c] = null; });
-
-    if (pointsGained > 0 && capturer) {
+    if (pointsGained > 0) {
       playerScores[capturer] += pointsGained;
-      const typeStr = isSuicideCheck ? "自滅パージ" : "捕獲成功";
+      const typeStr = isSuicideCheck ? '自滅パージ' : '捕獲成功';
       logMessage(`【${typeStr}】${capturer === 'white' ? '白' : '黒'} が敵石 ${capturedPositions.length}個 を回収！ (+${pointsGained} pt)`);
     }
-
     return capturedPositions.length;
   }
 
@@ -434,9 +478,7 @@
     }
 
     let grid = get9x9Grid(board);
-    let opponentColor = currentPlayer === 'white' ? 'black' : 'white';
-    processCaptures(grid, currentPlayer, false);
-    processCaptures(grid, opponentColor, true);
+    resolveAllCapturesSimultaneously(grid, currentPlayer, false);
     set9x9GridToBoard(grid, board);
 
     commitTurnMove();
@@ -503,7 +545,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.0r3 (赤石シークレット予約対応) スタート！");
+      logMessage("【BOT対局開始】v1.0r (捕獲同時判定対応) スタート！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
@@ -627,7 +669,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_Restored_v2.0r3_NineTopology.ntpn`;
+    a.download = `NTPN_v1.0r_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -651,7 +693,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v2.0r3_Highlight.gif`;
+      a.download = `NineTopology_v1.0r_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
