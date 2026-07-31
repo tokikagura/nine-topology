@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.0r4 (BOT Trace Diagnostic Edition)</title>
+<title>Nine Topology v1.0r6 (Capture Freeze Diagnostic Edition)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v1.0r4 (BOT経路診断版)</h1>
+<h1>NINE TOPOLOGY v1.0r6 (捕獲直後凍結診断版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -80,6 +80,8 @@
   let diagnosticContext = 'SYSTEM';
   let botStepSerial = 0;
   const LARGE_CAPTURE_THRESHOLD = 10;
+  let diagnosticFreezeRequested = false;
+  let diagnosticCaptureRecord = null;
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
   const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
@@ -108,11 +110,13 @@
 
     currentTurnMove = { place: null, slide: null, event: null };
     turnNumber = 1;
+    diagnosticFreezeRequested = false;
+    diagnosticCaptureRecord = null;
 
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v1.0r4 (BOT経路診断版) 準備完了。");
+    logMessage("システム起動 v1.0r6 (捕獲直後凍結診断版) 準備完了。");
     renderBoard();
   }
 
@@ -146,6 +150,7 @@
           let grid = get9x9Grid(board);
           resolveAllCapturesSimultaneously(grid, res.player, false);
           set9x9GridToBoard(grid, board);
+          if (freezeImmediatelyAfterCapture()) return;
         } else {
           logMessage(`【不渡り】${res.player === 'white' ? '白' : '黒'}が申告した赤石の出現位置が埋まっていたため設置失敗。`);
         }
@@ -224,14 +229,39 @@
   function logLargeCapture(details) {
     const total = details.groups.reduce((sum, g) => sum + g.positions.length, 0);
     if (total < LARGE_CAPTURE_THRESHOLD) return;
+    const gridBefore = get9x9Grid(board);
+    const emptyBefore = gridBefore.flat().filter(v => v === null).length;
+    diagnosticFreezeRequested = true;
+    diagnosticCaptureRecord = {
+      context: diagnosticContext,
+      total,
+      emptyBefore,
+      groups: details.groups.map(g => ({ stone: g.stone, positions: g.positions.map(p => ({...p})) }))
+    };
     logMessage(`【大量捕獲検知】経路=${diagnosticContext} / BOTstep=${botStepSerial} / turn=${turnNumber} / phase=${gamePhase} / player=${currentPlayer} / 合計=${total}`);
     details.groups.forEach((g, i) => {
       const coords = g.positions.map(coordLabel).join(',');
       logMessage(`【対象群${i+1}】色=${g.stone} 数=${g.positions.length} 座標=${coords}`);
     });
-    if (testBot && testBot.intervalId) {
-      testBot.stop('大量捕獲を検知したため自動停止');
-    }
+  }
+
+  function freezeImmediatelyAfterCapture() {
+    if (!diagnosticFreezeRequested || !diagnosticCaptureRecord) return false;
+    if (testBot && testBot.intervalId) testBot.stop('大量捕獲の盤面反映直後で停止');
+    const rec = diagnosticCaptureRecord;
+    const emptyAfter = countEmptyCells();
+    const gridAfter = get9x9Grid(board);
+    const notRemoved = [];
+    rec.groups.forEach(g => g.positions.forEach(pos => {
+      if (gridAfter[pos.r][pos.c] !== null) notRemoved.push(`${coordLabel(pos)}=${gridAfter[pos.r][pos.c]}`);
+    }));
+    gamePhase = 'diagnostic-freeze';
+    emptyCount = emptyAfter;
+    logMessage(`【捕獲直後凍結】空き: ${rec.emptyBefore} → ${emptyAfter} / 捕獲申告=${rec.total} / 増加=${emptyAfter - rec.emptyBefore}`);
+    if (notRemoved.length === 0) logMessage('【盤面反映確認】捕獲対象は全マス null。実際に盤面から除去されています。');
+    else logMessage(`【盤面反映異常】未除去=${notRemoved.join(',')}`);
+    renderBoard();
+    return true;
   }
 
   function detectCapturedGroups(grid) {
@@ -475,6 +505,9 @@
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
       instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
+    } else if (gamePhase === 'diagnostic-freeze') {
+      lockStatusEl.innerText = "診断停止";
+      instructionEl.innerText = "【捕獲直後】次の手番処理を行わず盤面を凍結中";
     }
   }
 
@@ -528,6 +561,7 @@
       let grid = get9x9Grid(board);
       let capturedCount = processCaptures(grid, currentPlayer);
       set9x9GridToBoard(grid, board);
+      if (freezeImmediatelyAfterCapture()) return;
 
       emptyCount = countEmptyCells();
 
@@ -582,6 +616,7 @@
     let grid = get9x9Grid(board);
     resolveAllCapturesSimultaneously(grid, currentPlayer, false);
     set9x9GridToBoard(grid, board);
+    if (freezeImmediatelyAfterCapture()) return;
 
     commitTurnMove();
     slideLockedBlocks = [b];
@@ -671,7 +706,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v1.0r4 (経路追跡・大量捕獲自動停止) スタート！");
+      logMessage("【BOT対局開始】v1.0r6 (大量捕獲直後で完全停止) スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
       this.intervalId = setInterval(() => {
