@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.5c</title>
+<title>Nine Topology v2.5d</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5c</h1>
+<h1>NINE TOPOLOGY v2.5d</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -118,7 +118,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage(`システム起動 v2.5c 準備完了。先手=${startingPlayer === 'white' ? '白' : '黒'}（再読込で交代）`);
+    logMessage(`システム起動 v2.5d 準備完了。先手=${startingPlayer === 'white' ? '白' : '黒'}（再読込で交代）`);
     renderBoard();
   }
 
@@ -462,14 +462,21 @@
   }
 
   function checkBlueStoneDrop() {
-    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN && gamePhase === 'place') {
-      if (board[2][4] === 'blue-reserved') {
-        board[2][4] = 'blue';
-        blueStoneDropped = true;
-        currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B3-b2]`;
-        logMessage(`【シーズン環境イベント】青石が B3-b2 にドロップ降臨いたしました！`);
-      }
+    if (blueStoneDropped || turnNumber !== SEASON_DROP_TURN || gamePhase !== 'place') return;
+
+    // v2.5d: B3をスライドすると予約マーカーも移動するため、
+    // 固定のb2ではなくB3内の現在位置を検索して実体化する。
+    const reservedCell = board[2].findIndex(cell => cell === 'blue-reserved');
+    if (reservedCell === -1) {
+      logMessage('【青石降臨エラー】B3内に予約マーカーが見つからないため降臨を停止しました。');
+      return;
     }
+
+    board[2][reservedCell] = 'blue';
+    blueStoneDropped = true;
+    const dropCellName = CELL_NAMES[reservedCell];
+    currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B3-${dropCellName}]`;
+    logMessage(`【シーズン環境イベント】青石が B3-${dropCellName} にドロップ降臨いたしました！`);
   }
 
   function commitTurnMove() {
@@ -790,7 +797,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.5c スタート！");
+      logMessage("【BOT対局開始】v2.5d スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -973,7 +980,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v2.5c_NineTopology.ntpn`;
+    a.download = `NTPN_v2.5d_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
