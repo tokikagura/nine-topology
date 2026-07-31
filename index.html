@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v1.0r3 (Manual Diagnostic Edition)</title>
+<title>Nine Topology v1.0r4 (BOT Trace Diagnostic Edition)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v1.0r3 (手動再現診断版)</h1>
+<h1>NINE TOPOLOGY v1.0r4 (BOT経路診断版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -77,6 +77,9 @@
   let undoHistory = [];
   let currentTurnMove = { place: null, slide: null, event: null };
   let turnNumber = 1;
+  let diagnosticContext = 'SYSTEM';
+  let botStepSerial = 0;
+  const LARGE_CAPTURE_THRESHOLD = 10;
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
   const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
@@ -109,7 +112,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v1.0r1 (一手戻る診断版) 準備完了。");
+    logMessage("システム起動 v1.0r4 (BOT経路診断版) 準備完了。");
     renderBoard();
   }
 
@@ -139,6 +142,7 @@
           board[res.b][res.c] = 'red';
           logMessage(`【環境イベント】${res.player === 'white' ? '白' : '黒'}が申告した【赤石（絶対障壁）】が B${res.b+1}-${CELL_NAMES[res.c]} に出現！`);
           // 出現による呼吸点遮断・捕獲チェック（同一盤面から同時判定）
+          diagnosticContext = `RED_APPEAR B${res.b+1}-${CELL_NAMES[res.c]} owner=${res.player}`;
           let grid = get9x9Grid(board);
           resolveAllCapturesSimultaneously(grid, res.player, false);
           set9x9GridToBoard(grid, board);
@@ -211,6 +215,25 @@
     return { group, liberties: liberties.size };
   }
 
+  function coordLabel(pos) {
+    const b = Math.floor(pos.r / 3) * 3 + Math.floor(pos.c / 3);
+    const cell = (pos.r % 3) * 3 + (pos.c % 3);
+    return `B${b+1}-${CELL_NAMES[cell]}`;
+  }
+
+  function logLargeCapture(details) {
+    const total = details.groups.reduce((sum, g) => sum + g.positions.length, 0);
+    if (total < LARGE_CAPTURE_THRESHOLD) return;
+    logMessage(`【大量捕獲検知】経路=${diagnosticContext} / BOTstep=${botStepSerial} / turn=${turnNumber} / phase=${gamePhase} / player=${currentPlayer} / 合計=${total}`);
+    details.groups.forEach((g, i) => {
+      const coords = g.positions.map(coordLabel).join(',');
+      logMessage(`【対象群${i+1}】色=${g.stone} 数=${g.positions.length} 座標=${coords}`);
+    });
+    if (testBot && testBot.intervalId) {
+      testBot.stop('大量捕獲を検知したため自動停止');
+    }
+  }
+
   function detectCapturedGroups(grid) {
     let checked = Array.from({length: 9}, () => Array(9).fill(false));
     let groups = [];
@@ -246,6 +269,8 @@
       else if (group.stone === 'black') scoreDelta.white += count;
       else if (group.stone === 'blue' && eventOwner) scoreDelta[eventOwner] += count * 2;
     }
+
+    logLargeCapture({ groups });
 
     for (const group of groups) {
       group.positions.forEach(pos => { grid[pos.r][pos.c] = null; });
@@ -283,6 +308,9 @@
       }
     }
 
+    if (capturedPositions.length > 0) {
+      logLargeCapture({ groups: [{ stone: targetColor, positions: capturedPositions }] });
+    }
     capturedPositions.forEach(pos => { grid[pos.r][pos.c] = null; });
     if (pointsGained > 0) {
       playerScores[capturer] += pointsGained;
@@ -496,6 +524,7 @@
         currentTurnMove.place = `+B${b+1}-${cellCoord}`;
       }
 
+      diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_PLACE B${b+1}-${cellCoord}`;
       let grid = get9x9Grid(board);
       let capturedCount = processCaptures(grid, currentPlayer);
       set9x9GridToBoard(grid, board);
@@ -549,6 +578,7 @@
       currentTurnMove.slide = `>B${b+1}-U`;
     }
 
+    diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_SLIDE B${b+1}-${direction.toUpperCase()}`;
     let grid = get9x9Grid(board);
     resolveAllCapturesSimultaneously(grid, currentPlayer, false);
     set9x9GridToBoard(grid, board);
@@ -641,25 +671,29 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v1.0r3 (手動再現診断版) スタート！");
+      logMessage("【BOT対局開始】v1.0r4 (経路追跡・大量捕獲自動停止) スタート！");
       this.moveCount = 0;
+      botStepSerial = 0;
       this.intervalId = setInterval(() => {
         try { this.step(); } 
         catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
       }, this.speedMs);
     }
 
-    stop() {
+    stop(reason = null) {
       if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
       const btn = document.getElementById('btn-toggle-bot');
       if (btn) {
         btn.innerText = "【全自動対局】開始 / 停止";
         btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
       }
-      logMessage("【対局停止】シミュレーションを停止しました。");
+      logMessage(reason ? `【対局停止】${reason}` : "【対局停止】シミュレーションを停止しました。");
     }
 
     step() {
+      botStepSerial++;
+      diagnosticContext = `BOT_STEP_BEGIN phase=${gamePhase}`;
+      logMessage(`【BOT STEP ${botStepSerial}】turn=${turnNumber} phase=${gamePhase} player=${currentPlayer}`);
       this.moveCount++;
       if (this.moveCount > this.maxMoves) {
         this.stop();
@@ -676,6 +710,7 @@
         }
         if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
         const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        logMessage(`【BOT判断】SETUP B${choice.b+1}-${CELL_NAMES[choice.c]}`);
         handleCellClick(choice.b, choice.c);
         return;
       }
@@ -710,12 +745,15 @@
         }
 
         const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        logMessage(`【BOT判断】PLACE B${choice.b+1}-${CELL_NAMES[choice.c]} redMode=${isWallDeclarationActive}`);
         handleCellClick(choice.b, choice.c);
         return;
       }
 
       if (gamePhase === 'slide') {
         if (Math.random() < 0.4) {
+          logMessage('【BOT判断】SLIDE PASS');
+          diagnosticContext = 'BOT_SLIDE_PASS';
           skipSlide();
           return;
         }
@@ -732,7 +770,9 @@
 
         const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
         const dirs = ['up', 'down', 'left', 'right'];
-        executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
+        const chosenDir = dirs[Math.floor(Math.random() * dirs.length)];
+        logMessage(`【BOT判断】SLIDE B${targetBlock+1}-${chosenDir}`);
+        executeSlide(targetBlock, chosenDir);
         return;
       }
     }
@@ -765,7 +805,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v1.0r_NineTopology.ntpn`;
+    a.download = `NTPN_v1.0r4_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
