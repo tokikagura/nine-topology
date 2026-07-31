@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.2 (Refactored Edition)</title>
+<title>Nine Topology v2.0r3 (Red Wall System Added)</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -27,18 +27,17 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.2 (高速リファクタリング版)</h1>
+<h1>NINE TOPOLOGY v2.0r3 (赤石障壁完全実装版)</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b>白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b>黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
-  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目 B7に降臨</span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
   <div id="phase-instruction">【検証モード】赤石シークレット申告＆2T自動出現対応</div>
-  <div style="margin: 4px 0; display: flex; justify-content: center; gap: 4px;">
+  <div style="margin: 4px 0;">
     <button id="btn-wall-declare" onclick="toggleWallDeclaration()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">赤石 (絶対障壁) をセット申告</button>
-    <button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #a3bac3, #4b5d67); color: #fff;" disabled>スライドをパス</button>
   </div>
   <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
     <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【全自動対局】開始 / 停止</button>
@@ -57,10 +56,11 @@
   let playerScores = { white: 0, black: 0 };
   let slideLockedBlocks = [];
   let currentPlayer = 'white';
-  let gamePhase = 'setup'; // 'setup' | 'place' | 'slide' | 'gameover'
+  let gamePhase = 'setup';
   let setupCount = 0;
   let isWallDeclarationActive = false;
 
+  // 赤石（絶対障壁）予約リスト: [{ b, c, dueTurn, player }]
   let redReservations = [];
 
   const SEASON_DROP_TURN = 5;
@@ -89,7 +89,7 @@
     redReservations = [];
 
     blueStoneDropped = false;
-    board[5][4] = 'blue-reserved'; // B6-b2
+    board[2][4] = 'blue-reserved'; // B3-b2
 
     ntpnMoveHistory = [];
     boardSnapshots = [];
@@ -101,7 +101,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage("システム起動 v2.2 (高速リファクタリング版) 準備完了。");
+    logMessage("システム起動 v2.0r3 (赤石障壁2T後出現プロトコル実装) 準備完了。");
     renderBoard();
   }
 
@@ -122,13 +122,15 @@
     }
   }
 
+  /* 赤石出現のタイマー処理 (2ターン後手番時) */
   function processRedReservations() {
     let remaining = [];
     for (let res of redReservations) {
       if (res.dueTurn === turnNumber) {
-        if (board[res.b][res.c] === null) {
+        if (board[res.b][res.c] === null || board[res.b][res.c] === 'blue-reserved') {
           board[res.b][res.c] = 'red';
           logMessage(`【環境イベント】${res.player === 'white' ? '白' : '黒'}が申告した【赤石（絶対障壁）】が B${res.b+1}-${CELL_NAMES[res.c]} に出現！`);
+          // 出現による呼吸点遮断・捕獲チェック
           let grid = get9x9Grid(board);
           processCaptures(grid, 'white', false);
           processCaptures(grid, 'black', false);
@@ -143,20 +145,13 @@
     redReservations = remaining;
   }
 
-  // ① 座標変換用ヘルパー
-  function get9x9Coord(b, c) {
-    return {
-      r: Math.floor(b / 3) * 3 + Math.floor(c / 3),
-      col: (b % 3) * 3 + (c % 3)
-    };
-  }
-
   function get9x9Grid(boardData) {
     let grid = Array.from({length: 9}, () => Array(9).fill(null));
     for (let b = 0; b < 9; b++) {
       for (let c = 0; c < 9; c++) {
-        let pos = get9x9Coord(b, c);
-        grid[pos.r][pos.col] = boardData[b][c];
+        let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+        let col = (b % 3) * 3 + (c % 3);
+        grid[r][col] = boardData[b][c];
       }
     }
     return grid;
@@ -174,7 +169,7 @@
 
   function getGroupLiberties(grid, startR, startC) {
     const targetType = grid[startR][startC];
-    if (!targetType || targetType === 'red') {
+    if (!targetType || targetType === 'red' || targetType === 'blue-reserved') {
       return { group: [], liberties: 99 };
     }
 
@@ -197,7 +192,7 @@
 
         if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
           let neighbor = grid[nr][nc];
-          if (neighbor === null || neighbor === 'blue-reserved') {
+          if (neighbor === null) {
             liberties.add(`${nr},${nc}`);
           } else if (neighbor === targetType && !visited[nr][nc]) {
             visited[nr][nc] = true;
@@ -209,8 +204,7 @@
     return { group, liberties: liberties.size };
   }
 
-  // ② processCaptures() の責務分離
-  function detectCaptures(grid, capturer) {
+  function processCaptures(grid, capturer, isSuicideCheck = false) {
     let targetColor = capturer === 'white' ? 'black' : 'white';
     let checked = Array.from({length: 9}, () => Array(9).fill(false));
     let capturedPositions = [];
@@ -234,41 +228,22 @@
         }
       }
     }
-    return { capturedPositions, pointsGained };
-  }
 
-  function removeCapturedStones(grid, capturedPositions) {
     capturedPositions.forEach(pos => { grid[pos.r][pos.c] = null; });
-  }
 
-  function addPlayerScore(capturer, pointsGained) {
     if (pointsGained > 0 && capturer) {
       playerScores[capturer] += pointsGained;
-    }
-  }
-
-  function logCaptureResult(capturer, count, pointsGained, isSuicideCheck) {
-    if (pointsGained > 0 && capturer) {
       const typeStr = isSuicideCheck ? "自滅パージ" : "捕獲成功";
-      logMessage(`【${typeStr}】${capturer === 'white' ? '白' : '黒'} が敵石 ${count}個 を回収！ (+${pointsGained} pt)`);
+      logMessage(`【${typeStr}】${capturer === 'white' ? '白' : '黒'} が敵石 ${capturedPositions.length}個 を回収！ (+${pointsGained} pt)`);
     }
-  }
 
-  function processCaptures(grid, capturer, isSuicideCheck = false) {
-    const { capturedPositions, pointsGained } = detectCaptures(grid, capturer);
-    if (capturedPositions.length > 0) {
-      removeCapturedStones(grid, capturedPositions);
-      addPlayerScore(capturer, pointsGained);
-      logCaptureResult(capturer, capturedPositions.length, pointsGained, isSuicideCheck);
-    }
     return capturedPositions.length;
   }
 
-  // ④ 局所探索による高速化
   function isSuicideMove(b, c, playerColor) {
     let tempGrid = get9x9Grid(board);
-    let pos = get9x9Coord(b, c);
-    let r = pos.r, col = pos.col;
+    let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+    let col = (b % 3) * 3 + (c % 3);
 
     tempGrid[r][col] = playerColor;
 
@@ -288,52 +263,6 @@
     return selfRes.liberties === 0;
   }
 
-  // ④ スライド探索領域の局所化
-  function checkSlideSuicide(tempBlock, playerColor) {
-    let tempBoard = board.map(arr => [...arr]);
-    tempBoard[tempBlock.b] = tempBlock.data;
-
-    let tempGrid = get9x9Grid(tempBoard);
-    let opponentColor = playerColor === 'white' ? 'black' : 'white';
-
-    let checkedOpponent = Array.from({length: 9}, () => Array(9).fill(false));
-    let capturesOpponent = false;
-
-    let bRow = Math.floor(tempBlock.b / 3) * 3;
-    let bCol = (tempBlock.b % 3) * 3;
-
-    let rMin = Math.max(0, bRow - 1), rMax = Math.min(8, bRow + 3);
-    let cMin = Math.max(0, bCol - 1), cMax = Math.min(8, bCol + 3);
-
-    for (let r = rMin; r <= rMax; r++) {
-      for (let c = cMin; c <= cMax; c++) {
-        if ((tempGrid[r][c] === opponentColor || tempGrid[r][c] === 'blue') && !checkedOpponent[r][c]) {
-          let res = getGroupLiberties(tempGrid, r, c);
-          res.group.forEach(pos => { checkedOpponent[pos.r][pos.c] = true; });
-          if (res.liberties === 0) {
-            capturesOpponent = true;
-            break;
-          }
-        }
-      }
-      if (capturesOpponent) break;
-    }
-
-    if (capturesOpponent) return false;
-
-    let checkedSelf = Array.from({length: 9}, () => Array(9).fill(false));
-    for (let r = 0; r < 9; r++) {
-      for (let c = 0; c < 9; c++) {
-        if (tempGrid[r][c] === playerColor && !checkedSelf[r][c]) {
-          let res = getGroupLiberties(tempGrid, r, c);
-          res.group.forEach(pos => { checkedSelf[pos.r][pos.c] = true; });
-          if (res.liberties === 0) return true;
-        }
-      }
-    }
-    return false;
-  }
-
   function saveBoardSnapshot() {
     boardSnapshots.push({ turn: turnNumber, board: board.map(arr => [...arr]) });
   }
@@ -347,38 +276,13 @@
   }
 
   function checkBlueStoneDrop() {
-    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN) {
-      for (let b = 0; b < 9; b++) {
-        let idx = board[b].indexOf('blue-reserved');
-        if (idx !== -1) board[b][idx] = null;
+    if (!blueStoneDropped && turnNumber === SEASON_DROP_TURN && gamePhase === 'place') {
+      if (board[2][4] === 'blue-reserved') {
+        board[2][4] = 'blue';
+        blueStoneDropped = true;
+        currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B3-b2]`;
+        logMessage(`【シーズン環境イベント】青石が B3-b2 にドロップ降臨いたしました！`);
       }
-
-      const targetBlock = 6;
-      const targetCell = 4;
-      const overwrittenStone = board[targetBlock][targetCell];
-
-      board[targetBlock][targetCell] = 'blue';
-      blueStoneDropped = true;
-
-      currentTurnMove.event = `[EVENT: DROP_BLUE_STONE +B7-${CELL_NAMES[targetCell]}]`;
-      
-      let overwriteNote = overwrittenStone ? ` (既存の石[${overwrittenStone}]を消滅消去)` : '';
-      logMessage(`【シーズン環境イベント】青石が B6 予告地から破断移動し、B7-${CELL_NAMES[targetCell]} にドロップ降臨いたしました！${overwriteNote}`);
-
-      let grid = get9x9Grid(board);
-      processCaptures(grid, 'white', false);
-      processCaptures(grid, 'black', false);
-      set9x9GridToBoard(grid, board);
-    }
-  }
-
-  function advanceTurn() {
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    processRedReservations();
-    checkBlueStoneDrop();
-    if (!testBot.headless) {
-      renderBoard();
     }
   }
 
@@ -409,7 +313,7 @@
   function updateStatusPanel() {
     emptyCount = countEmptyCells();
 
-    document.getElementById('current-player').innerText = gamePhase === 'gameover' ? '終局' : (currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)');
+    document.getElementById('current-player').innerText = currentPlayer === 'white' ? '先手 (白)' : '後手 (黒)';
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = `${playerScores.white} pt`;
@@ -419,33 +323,21 @@
 
     const lockStatusEl = document.getElementById('slide-lock-status');
     const instructionEl = document.getElementById('phase-instruction');
-    const skipBtn = document.getElementById('btn-skip-slide');
 
     if (gamePhase === 'setup') {
       lockStatusEl.innerText = "準備フェーズ";
       instructionEl.innerText = "【準備フェーズ】四隅ブロックに各自初期石をデポジット中...";
-      if (skipBtn) skipBtn.disabled = true;
     } else if (gamePhase === 'place') {
       lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
       instructionEl.innerText = "【配置フェーズ】石を配置して呼吸点を包囲してください";
-      if (skipBtn) skipBtn.disabled = true;
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
       instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
-      if (skipBtn) skipBtn.disabled = false;
-    } else if (gamePhase === 'gameover') {
-      lockStatusEl.innerText = "対局終了 (終局)";
-      let resText = "引き分け";
-      if (playerScores.white > playerScores.black) resText = "先手 (白) の捕獲勝利！";
-      else if (playerScores.black > playerScores.white) resText = "後手 (黒) の捕獲勝利！";
-      instructionEl.innerText = `【終局】${resText}`;
-      if (skipBtn) skipBtn.disabled = true;
     }
   }
 
   function isValidPlaceTarget(b, c) {
     if (board[b][c] !== null) return false;
-
     if (gamePhase === 'setup') {
       if (!CORNER_BLOCKS.includes(b)) return false;
       if (board[b].some(stone => stone === currentPlayer)) return false;
@@ -458,26 +350,14 @@
   }
 
   function handleCellClick(b, c) {
-    if (gamePhase === 'gameover') return;
-
     if (gamePhase === 'setup') {
       if (!isValidPlaceTarget(b, c)) return;
       board[b][c] = currentPlayer;
-      
-      const pSide = currentPlayer === 'white' ? 'W' : 'B';
-      const cellCoord = CELL_NAMES[c];
-      ntpnMoveHistory.push(`[SETUP] ${pSide}+B${b+1}-${cellCoord}`);
-      logMessage(`[記譜] [SETUP] ${pSide}+B${b+1}-${cellCoord}`);
-      saveBoardSnapshot();
-
       setupCount++;
       if (setupCount === 4) {
         gamePhase = 'place';
-        currentPlayer = 'white';
         processRedReservations();
         checkBlueStoneDrop();
-        renderBoard();
-        return;
       }
       currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
       renderBoard();
@@ -486,6 +366,7 @@
 
       const cellCoord = CELL_NAMES[c];
       if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
+        // 赤石（絶対障壁）のシークレット申告 (2ターン後出現: +2ターン)
         wallCount[currentPlayer]--;
         isWallDeclarationActive = false;
         const btn = document.getElementById('btn-wall-declare');
@@ -509,55 +390,62 @@
         logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
         currentTurnMove.slide = null;
         commitTurnMove();
-        advanceTurn();
+        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+        gamePhase = 'place';
+        processRedReservations();
+        checkBlueStoneDrop();
       } else if (emptyCount <= 15) {
         commitTurnMove();
-        advanceTurn();
+        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+        gamePhase = 'place';
+        processRedReservations();
+        checkBlueStoneDrop();
       } else {
         gamePhase = 'slide';
-        if (!testBot.headless) renderBoard();
       }
+      renderBoard();
     }
   }
 
   function executeSlide(b, direction) {
-    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return false;
-    const block = [...board[b]];
+    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
+    const block = board[b];
 
     if (direction === 'right') {
       let t0 = block[2]; block[2] = block[1]; block[1] = block[0]; block[0] = t0;
       let t1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = t1;
       let t2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = t2;
+      currentTurnMove.slide = `>B${b+1}-R`;
     } else if (direction === 'left') {
       let t0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = t0;
       let t1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = t1;
       let t2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = t2;
+      currentTurnMove.slide = `>B${b+1}-L`;
     } else if (direction === 'down') {
       let t0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = t0;
       let t1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = t1;
       let t2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = t2;
+      currentTurnMove.slide = `>B${b+1}-D`;
     } else if (direction === 'up') {
       let t0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = t0;
       let t1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = t1;
       let t2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = t2;
+      currentTurnMove.slide = `>B${b+1}-U`;
     }
-
-    if (checkSlideSuicide({ b, data: block }, currentPlayer)) {
-      return false;
-    }
-
-    board[b] = block;
-    const dirCode = direction[0].toUpperCase();
-    currentTurnMove.slide = `>B${b+1}-${dirCode}`;
 
     let grid = get9x9Grid(board);
+    let opponentColor = currentPlayer === 'white' ? 'black' : 'white';
     processCaptures(grid, currentPlayer, false);
+    processCaptures(grid, opponentColor, true);
     set9x9GridToBoard(grid, board);
 
     commitTurnMove();
     slideLockedBlocks = [b];
-    advanceTurn();
-    return true;
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    processRedReservations();
+    checkBlueStoneDrop();
+    renderBoard();
   }
 
   function skipSlide() {
@@ -565,10 +453,13 @@
     currentTurnMove.slide = null;
     commitTurnMove();
     slideLockedBlocks = [];
-    advanceTurn();
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    processRedReservations();
+    checkBlueStoneDrop();
+    renderBoard();
   }
 
-  // ③ 描画処理の独立
   function renderBoard() {
     const container = document.getElementById('board-container');
     container.innerHTML = '';
@@ -582,7 +473,6 @@
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
         cellEl.className = 'cell';
-        cellEl.onclick = () => handleCellClick(b, c);
 
         const stoneType = board[b][c];
         if (stoneType) {
@@ -598,30 +488,25 @@
     updateStatusPanel();
   }
 
-  /* ③＆⑤ BOTクラス Optimization */
+  /* === 自動対局用簡易テストBOT === */
   class NineTopologyRestoredTestBot {
     constructor(speedMs = 30) {
       this.speedMs = speedMs;
       this.intervalId = null;
       this.moveCount = 0;
       this.maxMoves = 250;
-      this.headless = false;
     }
 
-    start(headless = false) {
-      this.headless = headless;
+    start() {
       const btn = document.getElementById('btn-toggle-bot');
       if (btn) {
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.2 スタート！");
+      logMessage("【BOT対局開始】v2.0r3 (赤石シークレット予約対応) スタート！");
       this.moveCount = 0;
       this.intervalId = setInterval(() => {
-        try { 
-          this.step();
-          if (!this.headless) renderBoard();
-        } 
+        try { this.step(); } 
         catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
       }, this.speedMs);
     }
@@ -634,15 +519,9 @@
         btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
       }
       logMessage("【対局停止】シミュレーションを停止しました。");
-      renderBoard();
     }
 
     step() {
-      if (gamePhase === 'gameover') {
-        this.stop();
-        return;
-      }
-
       this.moveCount++;
       if (this.moveCount > this.maxMoves) {
         this.stop();
@@ -650,18 +529,7 @@
         return;
       }
 
-      let engine = currentPlayer === 'white' ? window.NTAI_Engine_White : window.NTAI_Engine_Black;
-      if (!engine) engine = window.NTAI_Engine;
-
       if (gamePhase === 'setup') {
-        if (engine && typeof engine.decideNextMove === 'function') {
-          const gameState = { player: currentPlayer, phase: gamePhase, redWallsLeft: wallCount[currentPlayer] };
-          const res = engine.decideNextMove(board, gameState);
-          if (res && res.place && isValidPlaceTarget(res.place.b, res.place.c)) {
-            handleCellClick(res.place.b, res.place.c);
-            return;
-          }
-        }
         const validTargets = [];
         for (let b of CORNER_BLOCKS) {
           for (let c = 0; c < 9; c++) {
@@ -675,61 +543,40 @@
       }
 
       if (gamePhase === 'place') {
-        const whiteValid = [];
-        const blackValid = [];
-        for (let b = 0; b < 9; b++) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) {
-              if (currentPlayer === 'white') whiteValid.push({ b, c });
-              else blackValid.push({ b, c });
-            }
-          }
-        }
-
-        const currentValid = currentPlayer === 'white' ? whiteValid : blackValid;
-
-        if (currentValid.length === 0) {
-          gamePhase = 'gameover';
-          this.stop();
-          let result = "引き分け";
-          if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
-          else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
-
-          logMessage(`【対局決着（終局）】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
-          updateStatusPanel();
-          return;
-        }
-
-        if (engine && typeof engine.decideNextMove === 'function') {
-          const gameState = { player: currentPlayer, phase: gamePhase, redWallsLeft: wallCount[currentPlayer] };
-          const res = engine.decideNextMove(board, gameState);
-          if (res && res.place && isValidPlaceTarget(res.place.b, res.place.c)) {
-            if (res.place.secretRed && wallCount[currentPlayer] > 0) isWallDeclarationActive = true;
-            handleCellClick(res.place.b, res.place.c);
-            return;
-          }
-        }
-
+        // 赤石のランダム申告 (15%の確率)
         if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
           isWallDeclarationActive = true;
         } else {
           isWallDeclarationActive = false;
         }
 
-        const choice = currentValid[Math.floor(Math.random() * currentValid.length)];
+        const validTargets = [];
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+
+        if (validTargets.length === 0) {
+          if (emptyCount === 0) {
+            this.stop();
+            let result = "引き分け";
+            if (playerScores.white > playerScores.black) result = "先手 (白) の捕獲勝利！";
+            else if (playerScores.black > playerScores.white) result = "後手 (黒) の捕獲勝利！";
+
+            logMessage(`【対局決着】${result} (白:${playerScores.white}pt - 黒:${playerScores.black}pt)`);
+            return;
+          }
+          skipSlide();
+          return;
+        }
+
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
         handleCellClick(choice.b, choice.c);
         return;
       }
 
       if (gamePhase === 'slide') {
-        if (engine && typeof engine.decideNextMove === 'function') {
-          const gameState = { player: currentPlayer, phase: gamePhase, redWallsLeft: wallCount[currentPlayer] };
-          const res = engine.decideNextMove(board, gameState);
-          if (res && res.slide && res.slide.b !== undefined && res.slide.dir) {
-            if (executeSlide(res.slide.b, res.slide.dir)) return;
-          }
-        }
-
         if (Math.random() < 0.4) {
           skipSlide();
           return;
@@ -740,22 +587,14 @@
           if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
         }
 
-        const dirs = ['up', 'down', 'left', 'right'];
-        let moved = false;
-
-        for (let attempt = 0; attempt < 10; attempt++) {
-          if (availableBlocks.length === 0) break;
-          const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
-          const dir = dirs[Math.floor(Math.random() * dirs.length)];
-          if (executeSlide(targetBlock, dir)) {
-            moved = true;
-            break;
-          }
-        }
-
-        if (!moved) {
+        if (availableBlocks.length === 0) {
           skipSlide();
+          return;
         }
+
+        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+        const dirs = ['up', 'down', 'left', 'right'];
+        executeSlide(targetBlock, dirs[Math.floor(Math.random() * dirs.length)]);
         return;
       }
     }
@@ -788,7 +627,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v2.2_NineTopology.ntpn`;
+    a.download = `NTPN_Restored_v2.0r3_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -812,7 +651,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v2.2_Highlight.gif`;
+      a.download = `NineTopology_v2.0r3_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
