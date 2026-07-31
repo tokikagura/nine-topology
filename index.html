@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.5g</title>
+<title>Nine Topology v2.5</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,12 +31,11 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5g</h1>
+<h1>NINE TOPOLOGY v2.5</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
   <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: 5T目降臨 / 128T決着</span></div>
-  <div class="flex-row"><span><b>先手交互テスト:</b> <span id="starter-info" style="color:#ffcc66;">判定中</span></span><span style="font-size:0.65rem;">再読込で交代</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
@@ -62,10 +61,8 @@
   let wallCount = { white: 3, black: 4 };
   let playerScores = { white: 0, black: 0 };
   let slideLockedBlocks = [];
-  // v2.5c: ページ再読込ごとに先手色を交互化し、白固定勝利か先手有利かを切り分ける。
-  const savedStarter = localStorage.getItem('nineTopology_v25c_nextStarter');
-  let startingPlayer = savedStarter === 'black' ? 'black' : 'white';
-  localStorage.setItem('nineTopology_v25c_nextStarter', startingPlayer === 'white' ? 'black' : 'white');
+  // v2.5正式版: 白を先手、黒を後手に固定。AIは対局ごとに各スロットへセットする。
+  const startingPlayer = 'white';
   let currentPlayer = startingPlayer;
   let gamePhase = 'setup';
   let setupCount = 0;
@@ -119,7 +116,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage(`システム起動 v2.5f 準備完了。先手=${startingPlayer === 'white' ? '白' : '黒'}（再読込で交代）`);
+    logMessage('システム起動 v2.5 準備完了。白先手・黒後手で固定。');
     renderBoard();
   }
 
@@ -551,10 +548,8 @@
     const blackRole = startingPlayer === 'black' ? '先手' : '後手';
     const whiteRoleLabel = document.getElementById('white-role-label');
     const blackRoleLabel = document.getElementById('black-role-label');
-    const starterInfo = document.getElementById('starter-info');
     if (whiteRoleLabel) whiteRoleLabel.innerText = `白 (${whiteRole}):`;
     if (blackRoleLabel) blackRoleLabel.innerText = `黒 (${blackRole}):`;
-    if (starterInfo) starterInfo.innerText = startingPlayer === 'white' ? '今回は白先手' : '今回は黒先手';
     document.getElementById('turn-count').innerText = turnNumber;
     document.getElementById('empty-count').innerText = emptyCount;
     document.getElementById('score-p1').innerText = `${playerScores.white} pt`;
@@ -836,7 +831,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.5e スタート！");
+      logMessage("【BOT対局開始】v2.5 スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -1013,7 +1008,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v2.5f_NineTopology.ntpn`;
+    a.download = `NTPN_v2.5_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
