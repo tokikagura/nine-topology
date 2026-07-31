@@ -166,6 +166,11 @@
     }
   }
 
+  function isInsideSameBlock(startR, startC, r, c) {
+    return Math.floor(startR / 3) === Math.floor(r / 3)
+      && Math.floor(startC / 3) === Math.floor(c / 3);
+  }
+
   function getGroupLiberties(grid, startR, startC) {
     const targetType = grid[startR][startC];
     if (!targetType || targetType === 'red' || targetType === 'blue-reserved') {
@@ -189,7 +194,10 @@
         let nr = r + dr[i];
         let nc = c + dc[i];
 
-        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+        // 3x3ブロックの境界は物理的な断絶。別ブロックの石や空点を
+        // 同一グループ／呼吸点として扱わない。
+        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9
+            && isInsideSameBlock(startR, startC, nr, nc)) {
           let neighbor = grid[nr][nc];
           if (neighbor === null) {
             liberties.add(`${nr},${nc}`);
@@ -295,7 +303,8 @@
     let dr = [-1, 1, 0, 0], dc = [0, 0, -1, 1];
     for (let i = 0; i < 4; i++) {
       let nr = r + dr[i], nc = col + dc[i];
-      if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+      if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9
+          && isInsideSameBlock(r, col, nr, nc)) {
         if (tempGrid[nr][nc] === opponentColor || tempGrid[nr][nc] === 'blue') {
           let res = getGroupLiberties(tempGrid, nr, nc);
           if (res.liberties === 0) return false;
@@ -693,7 +702,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v1.0r_Highlight.gif`;
+      a.download = `NineTopology_v1.0r2_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
