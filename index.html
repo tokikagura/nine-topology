@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.5</title>
+<title>Nine Topology v2.5.1</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5</h1>
+<h1>NINE TOPOLOGY v2.5.1</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -116,7 +116,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.5 準備完了。白先手・黒後手で固定。');
+    logMessage('システム起動 v2.5.1 準備完了。白先手・黒後手で固定。コウ判定有効。');
     renderBoard();
   }
 
@@ -415,6 +415,44 @@
     return selfRes.liberties === 0;
   }
 
+
+  // v2.5.1: 配置直後の捕獲結果を副作用なしで再現し、単純コウを判定する。
+  function simulatePlacementResult(b, c, playerColor) {
+    const tempBoard = board.map(block => [...block]);
+    tempBoard[b][c] = playerColor;
+    const tempGrid = get9x9Grid(tempBoard);
+    const targetColor = playerColor === 'white' ? 'black' : 'white';
+    const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+    const captured = [];
+
+    for (let r = 0; r < 9; r++) {
+      for (let col = 0; col < 9; col++) {
+        const stone = tempGrid[r][col];
+        if ((stone === targetColor || stone === 'blue') && !checked[r][col]) {
+          const res = getGroupLiberties(tempGrid, r, col);
+          res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
+          if (res.liberties === 0) captured.push(...res.group);
+        }
+      }
+    }
+
+    captured.forEach(pos => { tempGrid[pos.r][pos.c] = null; });
+    set9x9GridToBoard(tempGrid, tempBoard);
+    return tempBoard;
+  }
+
+  function boardStateKey(boardData) {
+    return boardData.map(block => block.map(cell => cell ?? '.').join(',')).join('|');
+  }
+
+  function isKoRepeatMove(b, c, playerColor) {
+    // 現在局面は末尾スナップショット。1手前へ戻る形だけを禁止する単純コウ。
+    if (boardSnapshots.length < 2) return false;
+    const resultBoard = simulatePlacementResult(b, c, playerColor);
+    const previousPosition = boardSnapshots[boardSnapshots.length - 2].board;
+    return boardStateKey(resultBoard) === boardStateKey(previousPosition);
+  }
+
   function saveBoardSnapshot() {
     boardSnapshots.push({ turn: turnNumber, board: board.map(arr => [...arr]) });
   }
@@ -581,6 +619,7 @@
       return true;
     } else if (gamePhase === 'place') {
       if (isSuicideMove(b, c, currentPlayer)) return false;
+      if (isKoRepeatMove(b, c, currentPlayer)) return false;
       return true;
     }
     return false;
@@ -831,7 +870,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.5 スタート！");
+      logMessage("【BOT対局開始】v2.5.1 スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -893,12 +932,18 @@
       if (gamePhase === 'place') {
         const engine = getActiveExternalEngine();
         const externalMove = getExternalMove(engine);
-        if (externalMove && externalMove.place &&
-            isValidPlaceTarget(externalMove.place.b, externalMove.place.c)) {
-          isWallDeclarationActive = !!externalMove.place.secretRed && wallCount[currentPlayer] > 0;
-          logMessage(`【外部AI判断】PLACE B${externalMove.place.b+1}-${CELL_NAMES[externalMove.place.c]} redMode=${isWallDeclarationActive}`);
-          handleCellClick(externalMove.place.b, externalMove.place.c);
-          return;
+        if (externalMove && externalMove.place) {
+          const eb = externalMove.place.b;
+          const ec = externalMove.place.c;
+          if (isValidPlaceTarget(eb, ec)) {
+            isWallDeclarationActive = !!externalMove.place.secretRed && wallCount[currentPlayer] > 0;
+            logMessage(`【外部AI判断】PLACE B${eb+1}-${CELL_NAMES[ec]} redMode=${isWallDeclarationActive}`);
+            handleCellClick(eb, ec);
+            return;
+          }
+          if (Number.isInteger(eb) && Number.isInteger(ec) && board[eb] && board[eb][ec] === null && isKoRepeatMove(eb, ec, currentPlayer)) {
+            logMessage(`【コウ禁止】外部AIの B${eb+1}-${CELL_NAMES[ec]} は直前局面の再現になるため却下。`);
+          }
         }
 
         // 赤石のランダム申告 (15%の確率)
@@ -1008,7 +1053,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v2.5_NineTopology.ntpn`;
+    a.download = `NTPN_v2.5.1_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
