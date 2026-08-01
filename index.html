@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.5.1</title>
+<title>Nine Topology v2.5.2fix</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -23,6 +23,7 @@
   .stone.red { background: radial-gradient(circle, #ff0055 30%, #990022 90%); box-shadow: 0 0 10px #ff0055; border-radius: 4px; }
   .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; border-radius: 50%; }
   .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; animation: pulse 1.5s infinite alternate; }
+  .stone.neutral { background: radial-gradient(circle, #9aa0a6 20%, #555b61 75%, #2f3439 100%); box-shadow: inset 0 0 6px rgba(255,255,255,0.22); border: 1px solid #b7bcc1; border-radius: 28%; }
   @keyframes pulse { 0% { opacity: 0.4; } 100% { opacity: 1.0; } }
   #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
   button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
@@ -31,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.5.1</h1>
+<h1>NINE TOPOLOGY v2.5.2fix</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">3</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">4</span>)</span></div>
@@ -73,6 +74,7 @@
 
   const SEASON_DROP_TURN = 5;
   let blueStoneDropped = false;
+  let gasPhaseActive = false;
 
   let ntpnMoveHistory = [];
   let boardSnapshots = [];
@@ -103,6 +105,7 @@
     redReservations = [];
 
     blueStoneDropped = false;
+    gasPhaseActive = false;
     board[2][4] = 'blue-reserved'; // B3-b2
 
     ntpnMoveHistory = [];
@@ -116,7 +119,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.5.1 準備完了。白先手・黒後手で固定。コウ判定有効。');
+    logMessage('システム起動 v2.5.2fix 準備完了。白先手・黒後手固定。コウ判定・ガス中立化ルール有効。');
     renderBoard();
   }
 
@@ -319,7 +322,7 @@
 
       if (group.stone === 'white') scoreDelta.black += count;
       else if (group.stone === 'black') scoreDelta.white += count;
-      else if (group.stone === 'blue' && eventOwner) scoreDelta[eventOwner] += count * 2;
+      else if (group.stone === 'blue' && eventOwner) scoreDelta[eventOwner] += count * 5;
     }
 
     logLargeCapture({ groups });
@@ -363,7 +366,7 @@
           if (res.liberties === 0) {
             res.group.forEach(pos => {
               capturedPositions.push(pos);
-              pointsGained += grid[pos.r][pos.c] === 'blue' ? 2 : 1;
+              pointsGained += grid[pos.r][pos.c] === 'blue' ? 5 : 1;
             });
           }
         }
@@ -474,6 +477,7 @@
       isWallDeclarationActive,
       redReservations: redReservations.map(res => ({ ...res })),
       blueStoneDropped,
+      gasPhaseActive,
       ntpnMoveHistory: [...ntpnMoveHistory],
       boardSnapshots: boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) })),
       currentTurnMove: cloneTurnMove(currentTurnMove),
@@ -503,6 +507,7 @@
     isWallDeclarationActive = state.isWallDeclarationActive;
     redReservations = state.redReservations.map(res => ({ ...res }));
     blueStoneDropped = state.blueStoneDropped;
+    gasPhaseActive = state.gasPhaseActive;
     ntpnMoveHistory = [...state.ntpnMoveHistory];
     boardSnapshots = state.boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) }));
     currentTurnMove = cloneTurnMove(state.currentTurnMove);
@@ -577,6 +582,62 @@
     return count;
   }
 
+
+  function appendTurnEvent(eventText) {
+    currentTurnMove.event = currentTurnMove.event
+      ? `${currentTurnMove.event} ${eventText}`
+      : eventText;
+  }
+
+  // v2.5.2fix: 空き10以下でガスフェーズ開始。
+  // その手の終了時点に存在する空きマスを発生源として、上下左右の白石・黒石を
+  // 同時に中立石へ変換する。得点・空きマス化・連鎖は発生しない。
+  function processEndOfTurnGas() {
+    emptyCount = countEmptyCells();
+
+    if (!gasPhaseActive && emptyCount <= 10) {
+      gasPhaseActive = true;
+      logMessage(`【ガスフェーズ開始】空き${emptyCount}。空きマス周辺の通常石が中立化します。`);
+      appendTurnEvent(`[EVENT: GAS_PHASE_START empty=${emptyCount}]`);
+    }
+
+    if (!gasPhaseActive) return 0;
+
+    const grid = get9x9Grid(board);
+    const targets = new Map();
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+
+    // 変換前の盤面だけを参照して対象を確定するため、この処理内では連鎖しない。
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (grid[r][c] !== null) continue;
+        for (let i = 0; i < 4; i++) {
+          const nr = r + dr[i];
+          const nc = c + dc[i];
+          if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+          if (grid[nr][nc] === 'white' || grid[nr][nc] === 'black') {
+            targets.set(`${nr},${nc}`, { r: nr, c: nc, from: grid[nr][nc] });
+          }
+        }
+      }
+    }
+
+    if (targets.size === 0) return 0;
+
+    const changed = [];
+    for (const target of targets.values()) {
+      grid[target.r][target.c] = 'neutral';
+      changed.push(`${coordLabel(target)}:${target.from === 'white' ? 'W' : 'B'}>N`);
+    }
+
+    set9x9GridToBoard(grid, board);
+    emptyCount = countEmptyCells();
+    appendTurnEvent(`[EVENT: GAS_NEUTRALIZE ${changed.join(',')}]`);
+    logMessage(`【ガス中立化】${targets.size}個の石が中立石へ変化。得点加算・空き増加なし。`);
+    return targets.size;
+  }
+
   function updateStatusPanel() {
     emptyCount = countEmptyCells();
 
@@ -603,7 +664,9 @@
       lockStatusEl.innerText = "準備フェーズ";
       instructionEl.innerText = "【準備フェーズ】四隅ブロックに各自初期石をデポジット中...";
     } else if (gamePhase === 'place') {
-      lockStatusEl.innerText = emptyCount <= 15 ? "スライドロック (空き15以下)" : "スライド可能";
+      if (gasPhaseActive) lockStatusEl.innerText = `ガスフェーズ (空き${emptyCount})`;
+      else if (emptyCount <= 15) lockStatusEl.innerText = `終盤警告 (空き${emptyCount})`;
+      else lockStatusEl.innerText = "スライド可能";
       instructionEl.innerText = "【配置フェーズ】石を配置して呼吸点を包囲してください";
     } else if (gamePhase === 'slide') {
       lockStatusEl.innerText = "スライド選択待ち";
@@ -674,12 +737,7 @@
       if (capturedCount > 0) {
         logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
         currentTurnMove.slide = null;
-        if (commitTurnMove()) return;
-        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-        gamePhase = 'place';
-        processRedReservations();
-        checkBlueStoneDrop();
-      } else if (emptyCount <= 15) {
+        processEndOfTurnGas();
         if (commitTurnMove()) return;
         currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
         gamePhase = 'place';
@@ -730,8 +788,9 @@
       return true;
     }
 
+    processEndOfTurnGas();
     if (commitTurnMove()) return true;
-    slideLockedBlocks = [b];
+    slideLockedBlocks = [];
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
     gamePhase = 'place';
     processRedReservations();
@@ -743,6 +802,7 @@
   function skipSlide() {
     if (gamePhase !== 'slide') return;
     currentTurnMove.slide = null;
+    processEndOfTurnGas();
     if (commitTurnMove()) return;
     slideLockedBlocks = [];
     currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
@@ -821,6 +881,7 @@
         scores: { ...playerScores },
         turnNumber,
         emptyCount,
+        gasPhaseActive,
         slideLockedBlocks: [...slideLockedBlocks]
       };
       return engine.decideNextMove(board.map(block => [...block]), gameState);
@@ -870,7 +931,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.5.1 スタート！");
+      logMessage("【BOT対局開始】v2.5.2fix スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -1053,7 +1114,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `NTPN_v2.5.1_NineTopology.ntpn`;
+    a.download = `NTPN_v2.5.2fix_NineTopology.ntpn`;
     a.click();
     URL.revokeObjectURL(url);
     logMessage(`対戦記譜(.ntpn)を保存完了！`);
@@ -1077,7 +1138,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `NineTopology_v1.0r_Highlight.gif`;
+      a.download = `NineTopology_v2.5.2fix_Highlight.gif`;
       a.click();
       URL.revokeObjectURL(url);
       logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
@@ -1097,6 +1158,7 @@
     }, 700);
   }
 
+  // v2.5.2fix変更点: 終盤警告(空き15)、ガス開始(空き10)、白黒石の中立化、スライドロック廃止。
   function drawBoardToCanvas(ctx, boardData) {
     ctx.fillStyle = "#1f2833"; ctx.fillRect(0, 0, 324, 324);
     ctx.strokeStyle = "#66fcf1"; ctx.lineWidth = 3; ctx.strokeRect(0, 0, 324, 324);
@@ -1113,6 +1175,8 @@
           else if (stone === 'black') ctx.fillStyle = "#4b5d67";
           else if (stone === 'red') ctx.fillStyle = "#ff0055";
           else if (stone === 'blue') ctx.fillStyle = "#00d2ff";
+          else if (stone === 'neutral') ctx.fillStyle = "#73787d";
+          else if (stone === 'blue-reserved') ctx.fillStyle = "rgba(0,210,255,0.35)";
           ctx.fill();
         }
       }
