@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology v2.7.1</title>
+<title>Nine Topology v2.7.2</title>
 <style>
   body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
@@ -32,7 +32,7 @@
 </style>
 </head>
 <body>
-<h1>NINE TOPOLOGY v2.7.1</h1>
+<h1>NINE TOPOLOGY v2.7.2</h1>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">5</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">5</span>)</span></div>
@@ -131,7 +131,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.7.1 準備完了。白先手・黒後手固定。コウ判定・ガス中立化ルール有効。');
+    logMessage('システム起動 v2.7.2 準備完了。白先手・黒後手固定。コウ判定・ガス中立化ルール有効。');
     renderBoard();
   }
 
@@ -250,41 +250,32 @@
     gamePhase = 'gameover';
     isWallDeclarationActive = false;
 
-    let resultText;
-    if (lostColors.includes('white') && lostColors.includes('black')) {
-      // v2.7.1: 双方が同時に15個以上失った場合も、加算済みの累計得点で勝敗を決める。
-      let winner = 'Draw';
-      if (playerScores.white > playerScores.black) {
-        resultText = '白黒同時に15個以上を失い、累計得点により白の勝利';
-        winner = 'White';
-      } else if (playerScores.black > playerScores.white) {
-        resultText = '白黒同時に15個以上を失い、累計得点により黒の勝利';
-        winner = 'Black';
-      } else {
-        resultText = '白黒同時に15個以上を失い、累計得点も同点のため引き分け';
-      }
-      gameEndInfo = {
-        winner,
-        reason: 'CAPTURE_15_BOTH_SCORE',
-        turns: turnNumber,
-        detail: `${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt`
-      };
-    } else {
-      const loser = lostColors[0];
-      const winnerColor = loser === 'white' ? 'black' : 'white';
-      const winner = winnerColor === 'white' ? '白' : '黒';
-      const loserName = loser === 'white' ? '白' : '黒';
-      resultText = `${loserName}が一度に15個以上を失い、${winner}の勝利`;
-      gameEndInfo = {
-        winner: winnerColor === 'white' ? 'White' : 'Black',
-        reason: 'CAPTURE_15',
-        turns: turnNumber,
-        detail: captureSummary
-      };
+    // v2.7.2: 15個以上の損失は即終局のトリガーに限定し、
+    // 片側損失・双方損失のどちらでも、加算済みの累計得点で勝敗を決める。
+    let winner = 'Draw';
+    let resultText = '累計得点も同点のため引き分け';
+
+    if (playerScores.white > playerScores.black) {
+      winner = 'White';
+      resultText = '累計得点により白の勝利';
+    } else if (playerScores.black > playerScores.white) {
+      winner = 'Black';
+      resultText = '累計得点により黒の勝利';
     }
 
-    logMessage(`【15個捕獲決着】${resultText}（${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
-    if (testBot && testBot.intervalId) testBot.stop('15個以上の一括捕獲で決着');
+    const lossText = lostColors.length === 2
+      ? '白黒が同時に15個以上を失い'
+      : `${lostColors[0] === 'white' ? '白' : '黒'}が一度に15個以上を失い`;
+
+    gameEndInfo = {
+      winner,
+      reason: 'CAPTURE_15_SCORE',
+      turns: turnNumber,
+      detail: `${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt`
+    };
+
+    logMessage(`【15個捕獲決着】${lossText}、${resultText}（${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
+    if (testBot && testBot.intervalId) testBot.stop('15個以上の一括捕獲で得点決着');
   }
 
   function finishByNoLegalMove(reason = '合法な配置手なし') {
@@ -1056,7 +1047,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.7.1 スタート！");
+      logMessage("【BOT対局開始】v2.7.2 スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -1272,7 +1263,7 @@
 
     let ntpnContent =
       `[Game "Nine Topology"]\n` +
-      `[GameVersion "2.7"]\n` +
+      `[GameVersion "2.7.2"]\n` +
       `[Date "${dateStr}"]\n` +
       `[Time "${timeStr}"]\n` +
       `[White "${whiteName}"]\n` +
