@@ -1467,6 +1467,12 @@
 
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
 
+    // 棋譜末尾に機械可読な終局イベントを1行追加する。
+    // 既存ヘッダと着手記録は変更せず、終局済みの場合だけ出力する。
+    if (gameEndInfo.winner !== 'IN_PROGRESS') {
+      ntpnContent += `[EVENT:GAME_END reason=${gameEndInfo.reason} winner=${gameEndInfo.winner} outcome=${outcome} result=${playerScores.white}-${playerScores.black} turns=${recordedTurns}]\n`;
+    }
+
     const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
