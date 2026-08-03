@@ -37,7 +37,7 @@
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁:<span id="wall-p1">5</span> / 青保護:<span id="blue-shield-p1">0</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁:<span id="wall-p2">5</span> / 青保護:<span id="blue-shield-p2">0</span>)</span></div>
-  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: B1初期 / B9=12T / B5=50T / 各5石保護</span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: B1-c3初期 / B9-a1=12T / B5-b2=50T / 各5石保護</span></div>
 </div>
 <div id="board-container"></div>
 <div id="control-panel">
@@ -132,9 +132,9 @@
       turns: null,
       detail: ''
     };
-    // 青石はすべて各ブロック中央(b2)。B1は初期実体、B9/B5は降臨予約。
-    board[0][4] = 'blue';          // B1-b2: 初期青石
-    board[8][4] = 'blue-reserved'; // B9-b2: 12ターン目
+    // 青石はB1-c3から開始し、B9-a1・B5-b2へ順次降臨。
+    board[0][8] = 'blue';          // B1-c3: 初期青石
+    board[8][0] = 'blue-reserved'; // B9-a1: 12ターン目
     board[4][4] = 'blue-reserved'; // B5-b2: 50ターン目
 
     ntpnMoveHistory = [];
@@ -148,7 +148,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.8-test。青石は0点、確保1個につきガス被害を最大5石防御。B1初期・B9=12T・B5=50T。');
+    logMessage('システム起動 v2.8-test。青石は0点、確保1個につきガス被害を最大5石防御。B1-c3初期・B9-a1=12T・B5-b2=50T。');
     renderBoard();
   }
 
