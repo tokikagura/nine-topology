@@ -1,0 +1,1521 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nine Topology v2.8-test</title>
+<style>
+  body { background-color: #0b0c10; color: #c5c6c7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 8px; display: flex; flex-direction: column; align-items: center; touch-action: manipulation; overflow-x: hidden; }
+  h1 { font-size: 1.1rem; color: #66fcf1; text-shadow: 0 0 8px rgba(102,252,241,0.5); margin: 4px 0; text-align: center; }
+  #status-panel { width: 100%; max-width: 340px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; margin-bottom: 6px; box-sizing: border-box; font-size: 0.75rem; }
+  .flex-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
+  #board-container { position: relative; width: 324px; height: 324px; background: #1f2833; border: 3px solid #66fcf1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; padding: 4px; box-sizing: border-box; border-radius: 6px; overflow: visible; }
+  .block { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 1px; background: #0b0c10; border-radius: 2px; position: relative; border: 2px solid transparent; box-sizing: border-box; transition: border-color 0.2s, box-shadow 0.2s; overflow: visible; }
+  .block.locked { border: 2px solid #ff0055 !important; box-shadow: inset 0 0 8px rgba(255,0,85,0.5); }
+  .cell { background: #1f2833; display: flex; align-items: center; justify-content: center; position: relative; height: 32px; width: 32px; }
+  .cell.manual-target { cursor: pointer; box-shadow: inset 0 0 0 1px rgba(102,252,241,0.18); }
+  .slide-pad { position:absolute; inset:0; z-index:20; pointer-events:none; }
+  .slide-arrow { position:absolute; width:25px; height:25px; padding:0; margin:0; border-radius:50%; background:#0b0c10; color:#66fcf1; border:1px solid #66fcf1; box-shadow:0 0 6px rgba(102,252,241,.8); pointer-events:auto; font-size:14px; line-height:25px; }
+  .slide-up{top:-12px;left:calc(50% - 12px)} .slide-down{bottom:-12px;left:calc(50% - 12px)} .slide-left{left:-12px;top:calc(50% - 12px)} .slide-right{right:-12px;top:calc(50% - 12px)}
+  .stone { width: 82%; height: 82%; border-radius: 50%; }
+  .stone.white { background: radial-gradient(circle, #ffffff 30%, #a3bac3 90%); box-shadow: 0 0 8px #ffffff; }
+  .stone.black { background: radial-gradient(circle, #4b5d67 10%, #000000 90%); box-shadow: 0 0 8px #000000; border: 1px solid #333; }
+  .stone.red { background: radial-gradient(circle, #ff0055 30%, #990022 90%); box-shadow: 0 0 10px #ff0055; border-radius: 4px; }
+  .stone.blue { background: radial-gradient(circle, #00d2ff 30%, #0044ff 90%); box-shadow: 0 0 10px #00d2ff; border-radius: 50%; }
+  .stone.blue-reserved { width: 70%; height: 70%; border: 2px dashed #00d2ff; border-radius: 50%; background: rgba(0, 210, 255, 0.15); box-shadow: inset 0 0 6px #00d2ff; animation: pulse 1.5s infinite alternate; }
+  .stone.gas-shielded { outline: 3px solid #00d2ff; outline-offset: 1px; box-shadow: 0 0 10px #00d2ff, inset 0 0 5px rgba(0,210,255,0.7); }
+  .stone.neutral { background: radial-gradient(circle, #9aa0a6 20%, #555b61 75%, #2f3439 100%); box-shadow: inset 0 0 6px rgba(255,255,255,0.22); border: 1px solid #b7bcc1; border-radius: 28%; }
+  @keyframes pulse { 0% { opacity: 0.4; } 100% { opacity: 1.0; } }
+  #control-panel { width: 100%; max-width: 340px; margin-top: 6px; background: rgba(31, 40, 51, 0.8); border: 1px solid #45f3ff; border-radius: 6px; padding: 6px; box-sizing: border-box; text-align: center; font-size: 0.8rem; }
+  button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #log-panel { width: 100%; max-width: 340px; height: 80px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; border-radius: 4px; margin-top: 4px; padding: 4px; box-sizing: border-box; font-family: monospace; font-size: 0.65rem; color: #66fcf1; text-align: left; }
+</style>
+</head>
+<body>
+<h1>NINE TOPOLOGY v2.8-test</h1>
+<div id="status-panel">
+  <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
+  <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁:<span id="wall-p1">5</span> / 青保護:<span id="blue-shield-p1">0</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁:<span id="wall-p2">5</span> / 青保護:<span id="blue-shield-p2">0</span>)</span></div>
+  <div class="flex-row" style="border-top:1px dashed #45f3ff; margin-top:3px; padding-top:3px;"><span><b>システム状況:</b> <span id="slide-lock-status" style="color:#66fcf1;">準備フェーズ</span></span><span id="season-info" style="color:#00d2ff;">青石: B1初期 / B9=12T / B5=50T / 各5石保護</span></div>
+</div>
+<div id="board-container"></div>
+<div id="control-panel">
+  <div id="phase-instruction">【青石保護テスト】青石0点・1個につきガス被害を最大5石防御</div>
+  <div style="margin: 4px 0;">
+    <button id="btn-wall-declare" onclick="toggleWallDeclaration()" style="background: linear-gradient(135deg, #ff0055, #990022); color: #fff;">赤石 (絶対障壁) をセット申告</button>
+  </div>
+  <div id="export-zone" style="margin-top:6px; display:flex; justify-content:center; flex-wrap:wrap; gap:2px;">
+    <button id="btn-toggle-bot" onclick="toggleTestBot()" style="background: linear-gradient(135deg, #ff9900, #ff5500); color: #fff;">【全自動対局】開始 / 停止</button>
+    <button id="btn-skip-slide" onclick="skipSlide()" style="background: linear-gradient(135deg, #59636f, #a3bac3); color:#fff;" disabled>スライドをパス</button>
+    <button id="btn-undo" onclick="undoOneMove()" style="background: linear-gradient(135deg, #9aa4b2, #ffffff); color: #0b0c10;" disabled>一手戻る</button>
+    <button id="btn-download-ntpn" onclick="downloadNtpnFile()" style="background: linear-gradient(135deg, #a3bac3, #ffffff); color: #0b0c10;">棋譜 (.ntpn) DL</button>
+    <button id="btn-generate-gif" onclick="generateHighlightGIF()" style="background: linear-gradient(135deg, #00d2ff, #0044ff); color: #fff;">10秒ショートGIF抽出</button>
+  </div>
+</div>
+<div id="log-panel"></div>
+
+<canvas id="video-canvas" width="324" height="324" style="display:none;"></canvas>
+
+<script>
+  let board = Array.from({length: 9}, () => Array(9).fill(null));
+  let emptyCount = 81;
+  let wallCount = { white: 5, black: 5 };
+  let playerScores = { white: 0, black: 0 };
+  let slideLockedBlocks = [];
+  // v2.5正式版: 白を先手、黒を後手に固定。AIは対局ごとに各スロットへセットする。
+  const startingPlayer = 'white';
+  let currentPlayer = startingPlayer;
+  let gamePhase = 'setup';
+  let setupCount = 0;
+  let isWallDeclarationActive = false;
+
+  // 赤石（絶対障壁）予約リスト: [{ b, c, dueTurn, player }]
+  let redReservations = [];
+
+  const BLUE_SHIELD_PER_STONE = 5;
+  const BLUE_DROP_EVENTS = [
+    { id: 'B1', block: 0, turn: 0, initial: true },
+    { id: 'B9', block: 8, turn: 12, initial: false },
+    { id: 'B5', block: 4, turn: 50, initial: false }
+  ];
+  let blueDropState = { B1: true, B9: false, B5: false };
+  let blueProtectionRemaining = { white: 0, black: 0 };
+  let blueStonesSecured = { white: 0, black: 0 };
+  // 青石で一度守られた石は、以後のガスフェーズでも免疫を維持する。
+  // 盤面と同じ9ブロック×9セルで、スライドにも追従させる。
+  let gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
+  let gasPhaseActive = false;
+
+  let ntpnMoveHistory = [];
+  let boardSnapshots = [];
+  let undoHistory = [];
+  let currentTurnMove = { place: null, slide: null, event: null };
+  let turnNumber = 1;
+  let diagnosticContext = 'SYSTEM';
+  let botStepSerial = 0;
+  let externalDuelAutoStarted = false;
+  const DECISIVE_CAPTURE_THRESHOLD = 15;
+  const MAX_TURNS = 128; // 大差がつかなくても128ターン終了時に得点判定
+  let gameEndInfo = {
+    winner: 'IN_PROGRESS',
+    reason: 'IN_PROGRESS',
+    turns: null,
+    detail: ''
+  };
+
+  const CORNER_BLOCKS = [0, 2, 6, 8];
+  const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
+
+  window.onload = function() { initGame(); };
+
+  function initGame() {
+    board = Array.from({length: 9}, () => Array(9).fill(null));
+    emptyCount = 81;
+    wallCount = { white: 5, black: 5 };
+    playerScores = { white: 0, black: 0 };
+    slideLockedBlocks = [];
+    currentPlayer = startingPlayer;
+    gamePhase = 'setup';
+    setupCount = 0;
+    isWallDeclarationActive = false;
+    redReservations = [];
+
+    blueDropState = { B1: true, B9: false, B5: false };
+    blueProtectionRemaining = { white: 0, black: 0 };
+    blueStonesSecured = { white: 0, black: 0 };
+    gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
+    gasPhaseActive = false;
+    gameEndInfo = {
+      winner: 'IN_PROGRESS',
+      reason: 'IN_PROGRESS',
+      turns: null,
+      detail: ''
+    };
+    // 青石はすべて各ブロック中央(b2)。B1は初期実体、B9/B5は降臨予約。
+    board[0][4] = 'blue';          // B1-b2: 初期青石
+    board[8][4] = 'blue-reserved'; // B9-b2: 12ターン目
+    board[4][4] = 'blue-reserved'; // B5-b2: 50ターン目
+
+    ntpnMoveHistory = [];
+    boardSnapshots = [];
+    undoHistory = [];
+    saveBoardSnapshot();
+
+    currentTurnMove = { place: null, slide: null, event: null };
+    turnNumber = 1;
+
+    const logPanel = document.getElementById('log-panel');
+    if (logPanel) logPanel.innerHTML = '';
+
+    logMessage('システム起動 v2.8-test。青石は0点、確保1個につきガス被害を最大5石防御。B1初期・B9=12T・B5=50T。');
+    renderBoard();
+  }
+
+  function toggleWallDeclaration() {
+    if (gamePhase !== 'place') return;
+    if (wallCount[currentPlayer] <= 0) {
+      logMessage(`【警告】${currentPlayer === 'white' ? '白' : '黒'}の赤石ストックがありません。`);
+      return;
+    }
+    isWallDeclarationActive = !isWallDeclarationActive;
+    const btn = document.getElementById('btn-wall-declare');
+    if (isWallDeclarationActive) {
+      btn.style.outline = "2px solid #66fcf1";
+      btn.innerText = "【選択中】置きたいマスをクリック (申告)";
+    } else {
+      btn.style.outline = "none";
+      btn.innerText = "赤石 (絶対障壁) をセット申告";
+    }
+  }
+
+  /* 赤石出現のタイマー処理 (2ターン後手番時) */
+  function processRedReservations() {
+    let remaining = [];
+    for (let res of redReservations) {
+      if (res.dueTurn === turnNumber) {
+        if (board[res.b][res.c] === null || board[res.b][res.c] === 'blue-reserved') {
+          board[res.b][res.c] = 'red';
+          appendTurnEvent(`[EVENT:RED_APPEAR B${res.b+1}-${CELL_NAMES[res.c]} owner=${res.player === 'white' ? 'W' : 'B'}]`);
+          logMessage(`【環境イベント】${res.player === 'white' ? '白' : '黒'}が申告した【赤石（絶対障壁）】が B${res.b+1}-${CELL_NAMES[res.c]} に出現！`);
+          // 出現による呼吸点遮断・捕獲チェック（同一盤面から同時判定）
+          diagnosticContext = `RED_APPEAR B${res.b+1}-${CELL_NAMES[res.c]} owner=${res.player}`;
+          let grid = get9x9Grid(board);
+          resolveAllCapturesSimultaneously(grid, res.player, false);
+          set9x9GridToBoard(grid, board);
+          emptyCount = countEmptyCells();
+          if (gamePhase === 'gameover') break;
+        } else {
+          appendTurnEvent(`[EVENT:RED_FAIL B${res.b+1}-${CELL_NAMES[res.c]} owner=${res.player === 'white' ? 'W' : 'B'}]`);
+          logMessage(`【不渡り】${res.player === 'white' ? '白' : '黒'}が申告した赤石の出現位置が埋まっていたため設置失敗。`);
+        }
+      } else {
+        remaining.push(res);
+      }
+    }
+    redReservations = remaining;
+  }
+
+  function get9x9Grid(boardData) {
+    let grid = Array.from({length: 9}, () => Array(9).fill(null));
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+        let col = (b % 3) * 3 + (c % 3);
+        grid[r][col] = boardData[b][c];
+      }
+    }
+    return grid;
+  }
+
+  function set9x9GridToBoard(grid, boardData) {
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        let b = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+        let cell = (r % 3) * 3 + (c % 3);
+        boardData[b][cell] = grid[r][c];
+      }
+    }
+  }
+
+  function getGroupLiberties(grid, startR, startC) {
+    const targetType = grid[startR][startC];
+    if (!targetType || targetType === 'red' || targetType === 'blue-reserved') {
+      return { group: [], liberties: 99 };
+    }
+
+    let group = [];
+    let liberties = new Set();
+    let visited = Array.from({length: 9}, () => Array(9).fill(false));
+    let queue = [[startR, startC]];
+    visited[startR][startC] = true;
+
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+
+    while (queue.length > 0) {
+      let [r, c] = queue.shift();
+      group.push({ r, c });
+
+      for (let i = 0; i < 4; i++) {
+        let nr = r + dr[i];
+        let nc = c + dc[i];
+
+        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+          let neighbor = grid[nr][nc];
+          if (neighbor === null) {
+            liberties.add(`${nr},${nc}`);
+          } else if (neighbor === targetType && !visited[nr][nc]) {
+            visited[nr][nc] = true;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+    }
+    return { group, liberties: liberties.size };
+  }
+
+  function coordLabel(pos) {
+    const b = Math.floor(pos.r / 3) * 3 + Math.floor(pos.c / 3);
+    const cell = (pos.r % 3) * 3 + (pos.c % 3);
+    return `B${b+1}-${CELL_NAMES[cell]}`;
+  }
+
+  function finishByDecisiveCapture(lostColors, captureSummary) {
+    if (gamePhase === 'gameover' || lostColors.length === 0) return;
+
+    gamePhase = 'gameover';
+    isWallDeclarationActive = false;
+
+    // v2.8-test: 15個以上の損失は即終局のトリガーに限定し、
+    // 片側損失・双方損失のどちらでも、加算済みの累計得点で勝敗を決める。
+    let winner = 'Draw';
+    let resultText = '累計得点も同点のため引き分け';
+
+    if (playerScores.white > playerScores.black) {
+      winner = 'White';
+      resultText = '累計得点により白の勝利';
+    } else if (playerScores.black > playerScores.white) {
+      winner = 'Black';
+      resultText = '累計得点により黒の勝利';
+    }
+
+    const lossText = lostColors.length === 2
+      ? '白黒が同時に15個以上を失い'
+      : `${lostColors[0] === 'white' ? '白' : '黒'}が一度に15個以上を失い`;
+
+    gameEndInfo = {
+      winner,
+      reason: 'CAPTURE_15_SCORE',
+      turns: turnNumber,
+      detail: `${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt`
+    };
+
+    logMessage(`【15個捕獲決着】${lossText}、${resultText}（${captureSummary} / 白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
+    if (testBot && testBot.intervalId) testBot.stop('15個以上の一括捕獲で得点決着');
+  }
+
+  function finishByNoLegalMove(reason = '合法な配置手なし') {
+    if (gamePhase === 'gameover') return;
+    gamePhase = 'gameover';
+    isWallDeclarationActive = false;
+
+    let resultText = '引き分け';
+    let winner = 'Draw';
+    if (playerScores.white > playerScores.black) {
+      resultText = '白の勝利';
+      winner = 'White';
+    } else if (playerScores.black > playerScores.white) {
+      resultText = '黒の勝利';
+      winner = 'Black';
+    }
+    gameEndInfo = {
+      winner,
+      reason: 'NO_LEGAL_PLACE',
+      turns: Math.max(0, turnNumber - 1),
+      detail: reason
+    };
+
+    logMessage(`【合法手なし決着】${reason}。${resultText}（白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
+    if (testBot && testBot.intervalId) testBot.stop('合法な配置手がないため得点判定');
+    renderBoard();
+  }
+
+  function finishByTurnLimit() {
+    if (gamePhase === 'gameover') return;
+
+    gamePhase = 'gameover';
+    isWallDeclarationActive = false;
+
+    let resultText = '引き分け';
+    let winner = 'Draw';
+    if (playerScores.white > playerScores.black) {
+      resultText = '白の得点勝利';
+      winner = 'White';
+    } else if (playerScores.black > playerScores.white) {
+      resultText = '黒の得点勝利';
+      winner = 'Black';
+    }
+    gameEndInfo = {
+      winner,
+      reason: 'TURN_LIMIT',
+      turns: MAX_TURNS,
+      detail: ''
+    };
+
+    logMessage(`【${MAX_TURNS}ターン決着】${resultText}（白:${playerScores.white}pt / 黒:${playerScores.black}pt）`);
+    if (testBot && testBot.intervalId) testBot.stop(`${MAX_TURNS}ターン到達で得点判定`);
+    renderBoard();
+  }
+
+  function logLargeCapture(details) {
+    const total = details.groups.reduce((sum, g) => sum + g.positions.length, 0);
+    if (total < DECISIVE_CAPTURE_THRESHOLD) return;
+    logMessage(`【大量捕獲検知】経路=${diagnosticContext} / BOTstep=${botStepSerial} / turn=${turnNumber} / phase=${gamePhase} / player=${currentPlayer} / 合計=${total}`);
+    details.groups.forEach((g, i) => {
+      const coords = g.positions.map(coordLabel).join(',');
+      logMessage(`【対象群${i+1}】色=${g.stone} 数=${g.positions.length} 座標=${coords}`);
+    });
+  }
+
+  function detectCapturedGroups(grid) {
+    let checked = Array.from({length: 9}, () => Array(9).fill(false));
+    let groups = [];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const stone = grid[r][c];
+        if ((stone === 'white' || stone === 'black' || stone === 'blue') && !checked[r][c]) {
+          const res = getGroupLiberties(grid, r, c);
+          res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
+          if (res.liberties === 0) {
+            groups.push({ stone, positions: res.group });
+          }
+        }
+      }
+    }
+    return groups;
+  }
+
+  function secureBlueStones(player, count, sourceLabel = '捕獲') {
+    if (!player || count <= 0) return;
+    const addedProtection = count * BLUE_SHIELD_PER_STONE;
+    blueStonesSecured[player] += count;
+    blueProtectionRemaining[player] += addedProtection;
+    logMessage(`【青石確保】${player === 'white' ? '白' : '黒'}が青石${count}個を確保。得点0、ガス保護枠+${addedProtection}（残り${blueProtectionRemaining[player]}）［${sourceLabel}］`);
+  }
+
+  function globalToBlockCell(r, c) {
+    return {
+      b: Math.floor(r / 3) * 3 + Math.floor(c / 3),
+      cell: (r % 3) * 3 + (c % 3)
+    };
+  }
+
+  function isGasProtectedAt(r, c) {
+    const pos = globalToBlockCell(r, c);
+    return !!gasProtectedBoard[pos.b][pos.cell];
+  }
+
+  function setGasProtectedAt(r, c, value) {
+    const pos = globalToBlockCell(r, c);
+    gasProtectedBoard[pos.b][pos.cell] = !!value;
+  }
+
+  function clearGasProtectionForPositions(positions) {
+    positions.forEach(pos => setGasProtectedAt(pos.r, pos.c, false));
+  }
+
+  function resolveAllCapturesSimultaneously(grid, eventOwner = null, isSuicideCheck = false) {
+    const groups = detectCapturedGroups(grid);
+    if (groups.length === 0) return 0;
+
+    const scoreDelta = { white: 0, black: 0 };
+    const capturedCount = { white: 0, black: 0, blue: 0 };
+
+    // 判定が終わるまで盤面を変更しない。これで白・黒の処理順による偏りを消す。
+    for (const group of groups) {
+      const count = group.positions.length;
+      capturedCount[group.stone] += count;
+
+      if (group.stone === 'white') scoreDelta.black += count;
+      else if (group.stone === 'black') scoreDelta.white += count;
+      else if (group.stone === 'blue' && eventOwner) secureBlueStones(eventOwner, count, 'スライド捕獲');
+    }
+
+    logLargeCapture({ groups });
+
+    for (const group of groups) {
+      clearGasProtectionForPositions(group.positions);
+      group.positions.forEach(pos => { grid[pos.r][pos.c] = null; });
+    }
+
+    playerScores.white += scoreDelta.white;
+    playerScores.black += scoreDelta.black;
+
+    const typeStr = isSuicideCheck ? '自滅パージ' : '同時捕獲';
+    if (scoreDelta.white > 0) logMessage(`【${typeStr}】白 が +${scoreDelta.white} pt を獲得`);
+    if (scoreDelta.black > 0) logMessage(`【${typeStr}】黒 が +${scoreDelta.black} pt を獲得`);
+
+    const lostColors = [];
+    if (capturedCount.white >= DECISIVE_CAPTURE_THRESHOLD) lostColors.push('white');
+    if (capturedCount.black >= DECISIVE_CAPTURE_THRESHOLD) lostColors.push('black');
+    if (lostColors.length > 0) {
+      finishByDecisiveCapture(
+        lostColors,
+        `白損失:${capturedCount.white} / 黒損失:${capturedCount.black}`
+      );
+    }
+
+    return groups.reduce((sum, group) => sum + group.positions.length, 0);
+  }
+
+  function processCaptures(grid, capturer, isSuicideCheck = false) {
+    const targetColor = capturer === 'white' ? 'black' : 'white';
+    const checked = Array.from({length: 9}, () => Array(9).fill(false));
+    const capturedNormal = [];
+    const capturedBlue = [];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const stone = grid[r][c];
+        if ((stone === targetColor || stone === 'blue') && !checked[r][c]) {
+          const res = getGroupLiberties(grid, r, c);
+          res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
+          if (res.liberties === 0) {
+            if (stone === 'blue') capturedBlue.push(...res.group);
+            else capturedNormal.push(...res.group);
+          }
+        }
+      }
+    }
+
+    if (capturedNormal.length > 0) {
+      logLargeCapture({ groups: [{ stone: targetColor, positions: capturedNormal }] });
+    }
+
+    clearGasProtectionForPositions([...capturedNormal, ...capturedBlue]);
+    [...capturedNormal, ...capturedBlue].forEach(pos => { grid[pos.r][pos.c] = null; });
+
+    if (capturedNormal.length > 0) {
+      playerScores[capturer] += capturedNormal.length;
+      const typeStr = isSuicideCheck ? '自滅パージ' : '捕獲成功';
+      logMessage(`【${typeStr}】${capturer === 'white' ? '白' : '黒'} が敵石 ${capturedNormal.length}個を回収！ (+${capturedNormal.length} pt)`);
+    }
+    if (capturedBlue.length > 0) {
+      secureBlueStones(capturer, capturedBlue.length, isSuicideCheck ? '自滅パージ' : '配置捕獲');
+    }
+
+    if (capturedNormal.length >= DECISIVE_CAPTURE_THRESHOLD) {
+      finishByDecisiveCapture(
+        [targetColor],
+        `${targetColor === 'white' ? '白' : '黒'}損失:${capturedNormal.length}`
+      );
+    }
+    return capturedNormal.length + capturedBlue.length;
+  }
+
+  function isSuicideMove(b, c, playerColor) {
+    let tempGrid = get9x9Grid(board);
+    let r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+    let col = (b % 3) * 3 + (c % 3);
+
+    tempGrid[r][col] = playerColor;
+
+    let opponentColor = playerColor === 'white' ? 'black' : 'white';
+    let dr = [-1, 1, 0, 0], dc = [0, 0, -1, 1];
+    for (let i = 0; i < 4; i++) {
+      let nr = r + dr[i], nc = col + dc[i];
+      if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+        if (tempGrid[nr][nc] === opponentColor || tempGrid[nr][nc] === 'blue') {
+          let res = getGroupLiberties(tempGrid, nr, nc);
+          if (res.liberties === 0) return false;
+        }
+      }
+    }
+
+    let selfRes = getGroupLiberties(tempGrid, r, col);
+    return selfRes.liberties === 0;
+  }
+
+
+  // v2.5.1: 配置直後の捕獲結果を副作用なしで再現し、単純コウを判定する。
+  function simulatePlacementResult(b, c, playerColor) {
+    const tempBoard = board.map(block => [...block]);
+    tempBoard[b][c] = playerColor;
+    const tempGrid = get9x9Grid(tempBoard);
+    const targetColor = playerColor === 'white' ? 'black' : 'white';
+    const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+    const captured = [];
+
+    for (let r = 0; r < 9; r++) {
+      for (let col = 0; col < 9; col++) {
+        const stone = tempGrid[r][col];
+        if ((stone === targetColor || stone === 'blue') && !checked[r][col]) {
+          const res = getGroupLiberties(tempGrid, r, col);
+          res.group.forEach(pos => { checked[pos.r][pos.c] = true; });
+          if (res.liberties === 0) captured.push(...res.group);
+        }
+      }
+    }
+
+    captured.forEach(pos => { tempGrid[pos.r][pos.c] = null; });
+    set9x9GridToBoard(tempGrid, tempBoard);
+    return tempBoard;
+  }
+
+  function boardStateKey(boardData) {
+    return boardData.map(block => block.map(cell => cell ?? '.').join(',')).join('|');
+  }
+
+  function isKoRepeatMove(b, c, playerColor) {
+    // 現在局面は末尾スナップショット。1手前へ戻る形だけを禁止する単純コウ。
+    if (boardSnapshots.length < 2) return false;
+    const resultBoard = simulatePlacementResult(b, c, playerColor);
+    const previousPosition = boardSnapshots[boardSnapshots.length - 2].board;
+    return boardStateKey(resultBoard) === boardStateKey(previousPosition);
+  }
+
+  function saveBoardSnapshot() {
+    boardSnapshots.push({ turn: turnNumber, board: board.map(arr => [...arr]) });
+  }
+
+  function cloneTurnMove(move) {
+    return { place: move.place, slide: move.slide, event: move.event };
+  }
+
+  function saveUndoState() {
+    undoHistory.push({
+      board: board.map(row => [...row]),
+      emptyCount,
+      wallCount: { ...wallCount },
+      playerScores: { ...playerScores },
+      slideLockedBlocks: [...slideLockedBlocks],
+      currentPlayer,
+      gamePhase,
+      setupCount,
+      isWallDeclarationActive,
+      redReservations: redReservations.map(res => ({ ...res })),
+      blueDropState: { ...blueDropState },
+      blueProtectionRemaining: { ...blueProtectionRemaining },
+      blueStonesSecured: { ...blueStonesSecured },
+      gasProtectedBoard: gasProtectedBoard.map(row => [...row]),
+      gasPhaseActive,
+      ntpnMoveHistory: [...ntpnMoveHistory],
+      boardSnapshots: boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) })),
+      currentTurnMove: cloneTurnMove(currentTurnMove),
+      turnNumber
+    });
+    updateUndoButton();
+  }
+
+  function updateUndoButton() {
+    const btn = document.getElementById('btn-undo');
+    if (btn) btn.disabled = undoHistory.length === 0;
+  }
+
+  function undoOneMove() {
+    if (undoHistory.length === 0) return;
+    if (testBot.intervalId) testBot.stop();
+
+    const state = undoHistory.pop();
+    board = state.board.map(row => [...row]);
+    emptyCount = state.emptyCount;
+    wallCount = { ...state.wallCount };
+    playerScores = { ...state.playerScores };
+    slideLockedBlocks = [...state.slideLockedBlocks];
+    currentPlayer = state.currentPlayer;
+    gamePhase = state.gamePhase;
+    setupCount = state.setupCount;
+    isWallDeclarationActive = state.isWallDeclarationActive;
+    redReservations = state.redReservations.map(res => ({ ...res }));
+    blueDropState = { ...state.blueDropState };
+    blueProtectionRemaining = { ...state.blueProtectionRemaining };
+    blueStonesSecured = { ...state.blueStonesSecured };
+    gasProtectedBoard = state.gasProtectedBoard.map(row => [...row]);
+    gasPhaseActive = state.gasPhaseActive;
+    ntpnMoveHistory = [...state.ntpnMoveHistory];
+    boardSnapshots = state.boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) }));
+    currentTurnMove = cloneTurnMove(state.currentTurnMove);
+    turnNumber = state.turnNumber;
+
+    const wallBtn = document.getElementById('btn-wall-declare');
+    if (wallBtn) {
+      wallBtn.style.outline = isWallDeclarationActive ? '2px solid #66fcf1' : 'none';
+      wallBtn.innerText = isWallDeclarationActive ? '【選択中】置きたいマスをクリック (申告)' : '赤石 (絶対障壁) をセット申告';
+    }
+
+    logMessage(`【一手戻る】ターン${turnNumber}の行動前へ復元しました。`);
+    renderBoard();
+  }
+
+  function logMessage(msg) {
+    const logPanel = document.getElementById('log-panel');
+    if (!logPanel) return;
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    logPanel.innerHTML += `[${time}] ${msg}<br>`;
+    logPanel.scrollTop = logPanel.scrollHeight;
+  }
+
+  function checkBlueStoneDrop() {
+    if (gamePhase !== 'place') return;
+
+    for (const event of BLUE_DROP_EVENTS) {
+      if (event.initial || blueDropState[event.id] || turnNumber !== event.turn) continue;
+
+      // 予約マーカーはブロック内スライドに追従するため、現在位置を検索して実体化する。
+      const reservedCell = board[event.block].findIndex(cell => cell === 'blue-reserved');
+      if (reservedCell === -1) {
+        logMessage(`【青石降臨エラー】${event.id}内に予約マーカーが見つかりません。`);
+        continue;
+      }
+
+      board[event.block][reservedCell] = 'blue';
+      blueDropState[event.id] = true;
+      const dropCellName = CELL_NAMES[reservedCell];
+      appendTurnEvent(`[EVENT:BLUE_DROP ${event.id}-${dropCellName} turn=${turnNumber}]`);
+      logMessage(`【青石降臨】ターン${turnNumber}、青石が ${event.id}-${dropCellName} に出現。確保しても得点はなく、ガス保護枠5を得ます。`);
+
+      // すでに完全包囲されていれば、降臨直後に手番側が確保する。
+      const grid = get9x9Grid(board);
+      const globalR = Math.floor(event.block / 3) * 3 + Math.floor(reservedCell / 3);
+      const globalC = (event.block % 3) * 3 + (reservedCell % 3);
+      const res = getGroupLiberties(grid, globalR, globalC);
+      if (res.liberties === 0) {
+        res.group.forEach(pos => { grid[pos.r][pos.c] = null; });
+        set9x9GridToBoard(grid, board);
+        secureBlueStones(currentPlayer, res.group.length, '降臨時包囲');
+        appendTurnEvent(`[EVENT:BLUE_SECURED owner=${currentPlayer} count=${res.group.length}]`);
+      }
+    }
+  }
+
+  function commitTurnMove() {
+    if (!currentTurnMove.place) return;
+
+    const pSide = currentPlayer === 'white' ? 'W' : 'B';
+    const placeStr = `${pSide}${currentTurnMove.place}`;
+    const slideStr = currentTurnMove.slide ? `${pSide}${currentTurnMove.slide}` : `${pSide}>PASS`;
+    const eventPrefix = currentTurnMove.event ? `${currentTurnMove.event} ` : '';
+
+    const fullMoveStr = `${eventPrefix}${placeStr} / ${slideStr}`;
+    ntpnMoveHistory.push(`${turnNumber}. ${fullMoveStr}`);
+
+    logMessage(`[記譜] ${turnNumber}. ${fullMoveStr}`);
+    saveBoardSnapshot();
+
+    // v2.5f: 128手目を記録した直後、その場で得点判定して完全停止する。
+    // 15個捕獲ですでに終局している場合は、そちらの結果を優先する。
+    if (gamePhase !== 'gameover' && turnNumber >= MAX_TURNS) {
+      currentTurnMove = { place: null, slide: null, event: null };
+      finishByTurnLimit();
+      return true;
+    }
+
+    turnNumber++;
+    currentTurnMove = { place: null, slide: null, event: null };
+    return false;
+  }
+
+  function countEmptyCells() {
+    let count = 0;
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) count++;
+    return count;
+  }
+
+
+  function appendTurnEvent(eventText) {
+    currentTurnMove.event = currentTurnMove.event
+      ? `${currentTurnMove.event} ${eventText}`
+      : eventText;
+  }
+
+  // 空き10以下でガスフェーズ開始。
+  // 青石を確保した側は、青石1個につき合計5石まで中立化を防ぐ。
+  // 保護対象は「今回もっとも多くの被害を受ける連結群」から順に自動選択する。
+  function chooseGasProtectedTargets(grid, targets, color, limit) {
+    if (limit <= 0) return [];
+    const targetKeys = new Set(
+      [...targets.values()]
+        .filter(t => t.from === color && !isGasProtectedAt(t.r, t.c))
+        .map(t => `${t.r},${t.c}`)
+    );
+    if (targetKeys.size === 0) return [];
+
+    const checked = Array.from({length: 9}, () => Array(9).fill(false));
+    const damagedGroups = [];
+
+    for (const key of targetKeys) {
+      const [r, c] = key.split(',').map(Number);
+      if (checked[r][c]) continue;
+      const group = getGroupLiberties(grid, r, c).group;
+      group.forEach(pos => { checked[pos.r][pos.c] = true; });
+      const threatened = group.filter(pos => targetKeys.has(`${pos.r},${pos.c}`));
+      damagedGroups.push({
+        groupSize: group.length,
+        threatened,
+        firstKey: threatened.map(pos => `${String(pos.r).padStart(2,'0')},${String(pos.c).padStart(2,'0')}`).sort()[0]
+      });
+    }
+
+    damagedGroups.sort((a, b) =>
+      b.threatened.length - a.threatened.length ||
+      b.groupSize - a.groupSize ||
+      a.firstKey.localeCompare(b.firstKey)
+    );
+
+    const protectedTargets = [];
+    for (const group of damagedGroups) {
+      const ordered = [...group.threatened].sort((a, b) => a.r - b.r || a.c - b.c);
+      for (const pos of ordered) {
+        if (protectedTargets.length >= limit) return protectedTargets;
+        protectedTargets.push(pos);
+      }
+    }
+    return protectedTargets;
+  }
+
+  function processEndOfTurnGas() {
+    emptyCount = countEmptyCells();
+
+    if (!gasPhaseActive && emptyCount <= 10) {
+      gasPhaseActive = true;
+      logMessage(`【ガスフェーズ開始】空き${emptyCount}。青石保護枠を適用後、空きマス周辺の通常石が中立化します。`);
+      appendTurnEvent(`[EVENT:GAS_START empty=${emptyCount}]`);
+    }
+
+    if (!gasPhaseActive) return 0;
+
+    const grid = get9x9Grid(board);
+    const targets = new Map();
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (grid[r][c] !== null) continue;
+        for (let i = 0; i < 4; i++) {
+          const nr = r + dr[i];
+          const nc = c + dc[i];
+          if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+          if (grid[nr][nc] === 'white' || grid[nr][nc] === 'black') {
+            targets.set(`${nr},${nc}`, { r: nr, c: nc, from: grid[nr][nc] });
+          }
+        }
+      }
+    }
+
+    if (targets.size === 0) return 0;
+
+    const protectedKeys = new Set();
+    for (const [key, target] of targets.entries()) {
+      if (isGasProtectedAt(target.r, target.c)) protectedKeys.add(key);
+    }
+
+    for (const color of ['white', 'black']) {
+      const protectedList = chooseGasProtectedTargets(
+        grid,
+        targets,
+        color,
+        blueProtectionRemaining[color]
+      );
+      if (protectedList.length > 0) {
+        protectedList.forEach(pos => {
+          protectedKeys.add(`${pos.r},${pos.c}`);
+          setGasProtectedAt(pos.r, pos.c, true);
+        });
+        blueProtectionRemaining[color] -= protectedList.length;
+        const labels = protectedList.map(coordLabel).join(',');
+        appendTurnEvent(`[EVENT:BLUE_PROTECT owner=${color} count=${protectedList.length} cells=${labels}]`);
+        logMessage(`【青石保護】${color === 'white' ? '白' : '黒'}の${protectedList.length}石を恒久防御。ガス免疫として盤面移動にも追従。保護残り${blueProtectionRemaining[color]}。`);
+      }
+    }
+
+    const changed = [];
+    for (const [key, target] of targets.entries()) {
+      if (protectedKeys.has(key)) continue;
+      setGasProtectedAt(target.r, target.c, false);
+      grid[target.r][target.c] = 'neutral';
+      changed.push(`${coordLabel(target)}:${target.from === 'white' ? 'W' : 'B'}>N`);
+    }
+
+    set9x9GridToBoard(grid, board);
+    emptyCount = countEmptyCells();
+    if (changed.length > 0) {
+      appendTurnEvent(`[EVENT:GAS_NEUTRALIZE ${changed.join(',')}]`);
+    }
+    logMessage(`【ガス処理】対象${targets.size}石 / 保護${protectedKeys.size}石 / 中立化${changed.length}石。得点加算・空き増加なし。`);
+    return changed.length;
+  }
+
+  function updateStatusPanel() {
+    emptyCount = countEmptyCells();
+
+    const isCurrentStarter = currentPlayer === startingPlayer;
+    document.getElementById('current-player').innerText = `${isCurrentStarter ? '先手' : '後手'} (${currentPlayer === 'white' ? '白' : '黒'})`;
+    const whiteRole = startingPlayer === 'white' ? '先手' : '後手';
+    const blackRole = startingPlayer === 'black' ? '先手' : '後手';
+    const whiteRoleLabel = document.getElementById('white-role-label');
+    const blackRoleLabel = document.getElementById('black-role-label');
+    if (whiteRoleLabel) whiteRoleLabel.innerText = `白 (${whiteRole}):`;
+    if (blackRoleLabel) blackRoleLabel.innerText = `黒 (${blackRole}):`;
+    document.getElementById('turn-count').innerText = turnNumber;
+    document.getElementById('empty-count').innerText = emptyCount;
+    document.getElementById('score-p1').innerText = `${playerScores.white} pt`;
+    document.getElementById('score-p2').innerText = `${playerScores.black} pt`;
+    document.getElementById('wall-p1').innerText = wallCount.white;
+    document.getElementById('wall-p2').innerText = wallCount.black;
+    document.getElementById('blue-shield-p1').innerText = blueProtectionRemaining.white;
+    document.getElementById('blue-shield-p2').innerText = blueProtectionRemaining.black;
+    updateUndoButton();
+
+    const lockStatusEl = document.getElementById('slide-lock-status');
+    const instructionEl = document.getElementById('phase-instruction');
+
+    if (gamePhase === 'setup') {
+      lockStatusEl.innerText = "準備フェーズ";
+      instructionEl.innerText = "【準備フェーズ】四隅ブロックに各自初期石をデポジット中...";
+    } else if (gamePhase === 'place') {
+      if (gasPhaseActive) lockStatusEl.innerText = `ガスフェーズ (空き${emptyCount})`;
+      else if (emptyCount <= 15) lockStatusEl.innerText = `終盤警告 (空き${emptyCount})`;
+      else lockStatusEl.innerText = "スライド可能";
+      instructionEl.innerText = "【配置フェーズ】石を配置して呼吸点を包囲してください";
+    } else if (gamePhase === 'slide') {
+      lockStatusEl.innerText = "スライド選択待ち";
+      instructionEl.innerText = "【スライドフェーズ】ブロックのスライド移動を実行中...";
+    }
+  }
+
+  function isValidPlaceTarget(b, c) {
+    if (board[b][c] !== null) return false;
+    if (gamePhase === 'setup') {
+      if (!CORNER_BLOCKS.includes(b)) return false;
+      if (board[b].some(stone => stone === currentPlayer)) return false;
+      return true;
+    } else if (gamePhase === 'place') {
+      if (isSuicideMove(b, c, currentPlayer)) return false;
+      if (isKoRepeatMove(b, c, currentPlayer)) return false;
+      return true;
+    }
+    return false;
+  }
+
+  function handleCellClick(b, c) {
+    if (gamePhase === 'setup') {
+      if (!isValidPlaceTarget(b, c)) return;
+      saveUndoState();
+      board[b][c] = currentPlayer;
+      setupCount++;
+      if (setupCount === 4) {
+        gamePhase = 'place';
+        processRedReservations();
+        checkBlueStoneDrop();
+      }
+      currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+      renderBoard();
+    } else if (gamePhase === 'place') {
+      if (!isValidPlaceTarget(b, c)) return;
+      saveUndoState();
+
+      const cellCoord = CELL_NAMES[c];
+      if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
+        // 赤石（絶対障壁）のシークレット申告 (2ターン後出現: +2ターン)
+        wallCount[currentPlayer]--;
+        isWallDeclarationActive = false;
+        const btn = document.getElementById('btn-wall-declare');
+        if (btn) { btn.style.outline = "none"; btn.innerText = "赤石 (絶対障壁) をセット申告"; }
+
+        redReservations.push({ b, c, dueTurn: turnNumber + 2, player: currentPlayer });
+        currentTurnMove.place = `+B${b+1}-${cellCoord}(SECRET_RED)`;
+        appendTurnEvent(`[EVENT:RED_DECLARE B${b+1}-${cellCoord} due=${turnNumber + 2}]`);
+        logMessage(`【シークレット申告】${currentPlayer === 'white' ? '白' : '黒'}が赤石障壁の出現場所を暗黙予約しました。`);
+      } else {
+        board[b][c] = currentPlayer;
+        currentTurnMove.place = `+B${b+1}-${cellCoord}`;
+      }
+
+      diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_PLACE B${b+1}-${cellCoord}`;
+      let grid = get9x9Grid(board);
+      let capturedCount = processCaptures(grid, currentPlayer);
+      set9x9GridToBoard(grid, board);
+
+      emptyCount = countEmptyCells();
+
+      if (gamePhase === 'gameover') {
+        commitTurnMove();
+        renderBoard();
+        return;
+      }
+
+      if (capturedCount > 0) {
+        logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
+        currentTurnMove.slide = null;
+        processEndOfTurnGas();
+        if (commitTurnMove()) return;
+        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+        gamePhase = 'place';
+        processRedReservations();
+        checkBlueStoneDrop();
+      } else {
+        gamePhase = 'slide';
+      }
+      renderBoard();
+    }
+  }
+
+  function executeSlide(b, direction) {
+    if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
+    const block = board[b];
+    const shieldBlock = gasProtectedBoard[b];
+
+    if (direction === 'right') {
+      let t0 = block[2]; block[2] = block[1]; block[1] = block[0]; block[0] = t0;
+      let t1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = t1;
+      let t2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = t2;
+      let s0 = shieldBlock[2]; shieldBlock[2] = shieldBlock[1]; shieldBlock[1] = shieldBlock[0]; shieldBlock[0] = s0;
+      let s1 = shieldBlock[5]; shieldBlock[5] = shieldBlock[4]; shieldBlock[4] = shieldBlock[3]; shieldBlock[3] = s1;
+      let s2 = shieldBlock[8]; shieldBlock[8] = shieldBlock[7]; shieldBlock[7] = shieldBlock[6]; shieldBlock[6] = s2;
+      currentTurnMove.slide = `>B${b+1}-R`;
+    } else if (direction === 'left') {
+      let t0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = t0;
+      let t1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = t1;
+      let t2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = t2;
+      let s0 = shieldBlock[0]; shieldBlock[0] = shieldBlock[1]; shieldBlock[1] = shieldBlock[2]; shieldBlock[2] = s0;
+      let s1 = shieldBlock[3]; shieldBlock[3] = shieldBlock[4]; shieldBlock[4] = shieldBlock[5]; shieldBlock[5] = s1;
+      let s2 = shieldBlock[6]; shieldBlock[6] = shieldBlock[7]; shieldBlock[7] = shieldBlock[8]; shieldBlock[8] = s2;
+      currentTurnMove.slide = `>B${b+1}-L`;
+    } else if (direction === 'down') {
+      let t0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = t0;
+      let t1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = t1;
+      let t2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = t2;
+      let s0 = shieldBlock[6]; shieldBlock[6] = shieldBlock[3]; shieldBlock[3] = shieldBlock[0]; shieldBlock[0] = s0;
+      let s1 = shieldBlock[7]; shieldBlock[7] = shieldBlock[4]; shieldBlock[4] = shieldBlock[1]; shieldBlock[1] = s1;
+      let s2 = shieldBlock[8]; shieldBlock[8] = shieldBlock[5]; shieldBlock[5] = shieldBlock[2]; shieldBlock[2] = s2;
+      currentTurnMove.slide = `>B${b+1}-D`;
+    } else if (direction === 'up') {
+      let t0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = t0;
+      let t1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = t1;
+      let t2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = t2;
+      let s0 = shieldBlock[0]; shieldBlock[0] = shieldBlock[3]; shieldBlock[3] = shieldBlock[6]; shieldBlock[6] = s0;
+      let s1 = shieldBlock[1]; shieldBlock[1] = shieldBlock[4]; shieldBlock[4] = shieldBlock[7]; shieldBlock[7] = s1;
+      let s2 = shieldBlock[2]; shieldBlock[2] = shieldBlock[5]; shieldBlock[5] = shieldBlock[8]; shieldBlock[8] = s2;
+      currentTurnMove.slide = `>B${b+1}-U`;
+    }
+
+    diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_SLIDE B${b+1}-${direction.toUpperCase()}`;
+    let grid = get9x9Grid(board);
+    resolveAllCapturesSimultaneously(grid, currentPlayer, false);
+    set9x9GridToBoard(grid, board);
+    emptyCount = countEmptyCells();
+
+    if (gamePhase === 'gameover') {
+      commitTurnMove();
+      renderBoard();
+      return true;
+    }
+
+    processEndOfTurnGas();
+    if (commitTurnMove()) return true;
+    slideLockedBlocks = [];
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    processRedReservations();
+    checkBlueStoneDrop();
+    renderBoard();
+    return true;
+  }
+
+  function skipSlide() {
+    if (gamePhase !== 'slide') return;
+    currentTurnMove.slide = null;
+    processEndOfTurnGas();
+    if (commitTurnMove()) return;
+    slideLockedBlocks = [];
+    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
+    gamePhase = 'place';
+    processRedReservations();
+    checkBlueStoneDrop();
+    renderBoard();
+  }
+
+  function renderBoard() {
+    const container = document.getElementById('board-container');
+    container.innerHTML = '';
+
+    for (let b = 0; b < 9; b++) {
+      const blockEl = document.createElement('div');
+      blockEl.className = 'block';
+
+      if (slideLockedBlocks.includes(b)) blockEl.classList.add('locked');
+
+      for (let c = 0; c < 9; c++) {
+        const cellEl = document.createElement('div');
+        cellEl.className = 'cell';
+        if ((gamePhase === 'setup' || gamePhase === 'place') && isValidPlaceTarget(b, c)) {
+          cellEl.classList.add('manual-target');
+          cellEl.onclick = () => handleCellClick(b, c);
+        }
+
+        const stoneType = board[b][c];
+        if (stoneType) {
+          const stoneEl = document.createElement('div');
+          stoneEl.className = `stone ${stoneType}`;
+          if ((stoneType === 'white' || stoneType === 'black') && gasProtectedBoard[b][c]) {
+            stoneEl.classList.add('gas-shielded');
+          }
+          cellEl.appendChild(stoneEl);
+        }
+
+        blockEl.appendChild(cellEl);
+      }
+
+      if (gamePhase === 'slide' && !testBot.intervalId && !slideLockedBlocks.includes(b)) {
+        const pad = document.createElement('div');
+        pad.className = 'slide-pad';
+        const arrows = [
+          ['up', '↑', 'slide-up'], ['down', '↓', 'slide-down'],
+          ['left', '←', 'slide-left'], ['right', '→', 'slide-right']
+        ];
+        arrows.forEach(([dir, label, cls]) => {
+          const btn = document.createElement('button');
+          btn.className = `slide-arrow ${cls}`;
+          btn.textContent = label;
+          btn.onclick = (ev) => { ev.stopPropagation(); executeSlide(b, dir); };
+          pad.appendChild(btn);
+        });
+        blockEl.appendChild(pad);
+      }
+
+      container.appendChild(blockEl);
+    }
+    const skipBtn = document.getElementById('btn-skip-slide');
+    if (skipBtn) skipBtn.disabled = gamePhase !== 'slide';
+    updateStatusPanel();
+  }
+
+  function getActiveExternalEngine() {
+    const sideEngine = currentPlayer === 'white'
+      ? window.NTAI_Engine_White
+      : window.NTAI_Engine_Black;
+    return sideEngine || window.NTAI_Engine || null;
+  }
+
+  function getExternalMove(engine) {
+    if (!engine || typeof engine.decideNextMove !== 'function') return null;
+    try {
+      const gameState = {
+        player: currentPlayer,
+        phase: gamePhase,
+        redWallsLeft: wallCount[currentPlayer],
+        scores: { ...playerScores },
+        turnNumber,
+        emptyCount,
+        gasPhaseActive,
+        blueProtectionRemaining: { ...blueProtectionRemaining },
+        blueStonesSecured: { ...blueStonesSecured },
+        blueDropState: { ...blueDropState },
+        blueDropSchedule: BLUE_DROP_EVENTS.map(event => ({ ...event })),
+        gasProtectedBoard: gasProtectedBoard.map(block => [...block]),
+        slideLockedBlocks: [...slideLockedBlocks]
+      };
+      return engine.decideNextMove(board.map(block => [...block]), gameState);
+    } catch (error) {
+      logMessage(`【外部AIエラー】${error.message}。内蔵BOTへ切り替えます。`);
+      return null;
+    }
+  }
+
+  function countOwnStonesInBlock(blockIndex, playerColor) {
+    return board[blockIndex].reduce((count, cell) => count + (cell === playerColor ? 1 : 0), 0);
+  }
+
+  function getGasTargetsForGrid(grid) {
+    const targets = new Map();
+    const dr = [-1, 1, 0, 0];
+    const dc = [0, 0, -1, 1];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (grid[r][c] !== null) continue;
+        for (let i = 0; i < 4; i++) {
+          const nr = r + dr[i];
+          const nc = c + dc[i];
+          if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+          const stone = grid[nr][nc];
+          if (stone === 'white' || stone === 'black') {
+            targets.set(`${nr},${nc}`, { r: nr, c: nc, stone });
+          }
+        }
+      }
+    }
+    return [...targets.values()];
+  }
+
+  function evaluateGasAwarePlacement(b, c, playerColor) {
+    // 配置とその直後の通常捕獲までを副作用なしで再現する。
+    const simulatedBoard = simulatePlacementResult(b, c, playerColor);
+    const grid = get9x9Grid(simulatedBoard);
+    const targets = getGasTargetsForGrid(grid);
+    const opponent = playerColor === 'white' ? 'black' : 'white';
+
+    let ownLoss = 0;
+    let opponentLoss = 0;
+    for (const target of targets) {
+      if (target.stone === playerColor) ownLoss++;
+      else if (target.stone === opponent) opponentLoss++;
+    }
+
+    const r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+    const col = (b % 3) * 3 + (c % 3);
+    const placedStoneDies = targets.some(target => target.r === r && target.c === col);
+
+    // 青石の残存保護枠を差し引いた「実被害」で評価する。
+    const effectiveOwnLoss = Math.max(0, ownLoss - blueProtectionRemaining[playerColor]);
+    const effectiveOpponentLoss = Math.max(0, opponentLoss - blueProtectionRemaining[opponent]);
+    let score = effectiveOpponentLoss * 7 - effectiveOwnLoss * 12;
+    if (placedStoneDies) score -= 30;
+
+    // 従来の密集回避も弱く残す。
+    score -= Math.max(0, countOwnStonesInBlock(b, playerColor) - 5) * 2;
+    return { score, ownLoss, opponentLoss, effectiveOwnLoss, effectiveOpponentLoss, placedStoneDies };
+  }
+
+  function chooseBuiltInPlacement(validTargets) {
+    // 赤石申告は石を置かないため、従来どおり合法候補から選ぶ。
+    if (isWallDeclarationActive) {
+      return validTargets[Math.floor(Math.random() * validTargets.length)];
+    }
+
+    // 現在ガス中、またはこの配置で空き10へ入る局面では専用評価へ切り替える。
+    const gasRelevant = gasPhaseActive || emptyCount <= 11;
+    if (gasRelevant) {
+      const evaluated = validTargets.map(pos => ({
+        ...pos,
+        ...evaluateGasAwarePlacement(pos.b, pos.c, currentPlayer)
+      }));
+      const bestScore = Math.max(...evaluated.map(item => item.score));
+      const best = evaluated.filter(item => item.score === bestScore);
+      const choice = best[Math.floor(Math.random() * best.length)];
+      logMessage(`【BOTガス評価】候補${validTargets.length}手 / 最良値${bestScore} / 自軍被害${choice.ownLoss}→${choice.effectiveOwnLoss} / 敵被害${choice.opponentLoss}→${choice.effectiveOpponentLoss}${choice.placedStoneDies ? ' / 配置石も被害' : ''}`);
+      return { b: choice.b, c: choice.c };
+    }
+
+    // 通常局面では自軍石が7個以上あるブロックへの追加配置を避ける。
+    const saferTargets = validTargets.filter(({ b }) => countOwnStonesInBlock(b, currentPlayer) < 7);
+    const pool = saferTargets.length > 0 ? saferTargets : validTargets;
+
+    const avoided = validTargets.length - saferTargets.length;
+    if (avoided > 0 && saferTargets.length > 0) {
+      logMessage(`【BOT評価】自軍石7個以上の密集ブロック候補を${avoided}手回避`);
+    } else if (avoided > 0) {
+      logMessage('【BOT評価】全合法手が密集ブロック内のため回避制限を解除');
+    }
+
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  /* === 自動対局用簡易テストBOT === */
+  class NineTopologyRestoredTestBot {
+    constructor(speedMs = 30) {
+      this.speedMs = speedMs;
+      this.intervalId = null;
+      this.moveCount = 0;
+      this.maxMoves = 400; // 128ターン決着より後ろに置く非常停止
+    }
+
+    start() {
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【対局中】全自動対局進行中...";
+        btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
+      }
+      logMessage("【BOT対局開始】v2.8-test スタート！");
+      this.moveCount = 0;
+      botStepSerial = 0;
+    externalDuelAutoStarted = false;
+      this.intervalId = setInterval(() => {
+        try { this.step(); } 
+        catch (error) { this.stop(); logMessage(`【エラー発生】: ${error.message}`); }
+      }, this.speedMs);
+    }
+
+    stop(reason = null) {
+      if (this.intervalId) { clearInterval(this.intervalId); this.intervalId = null; }
+      const btn = document.getElementById('btn-toggle-bot');
+      if (btn) {
+        btn.innerText = "【全自動対局】開始 / 停止";
+        btn.style.background = "linear-gradient(135deg, #ff9900, #ff5500)";
+      }
+      logMessage(reason ? `【対局停止】${reason}` : "【対局停止】シミュレーションを停止しました。");
+    }
+
+    step() {
+      if (gamePhase === 'gameover') {
+        this.stop('対局は終了しています');
+        return;
+      }
+
+      botStepSerial++;
+      diagnosticContext = `BOT_STEP_BEGIN phase=${gamePhase}`;
+      logMessage(`【BOT STEP ${botStepSerial}】turn=${turnNumber} phase=${gamePhase} player=${currentPlayer}`);
+      this.moveCount++;
+      if (this.moveCount > this.maxMoves) {
+        this.stop();
+        logMessage("【安全停止】異常継続を検知したため400ステップで停止しました。");
+        return;
+      }
+
+      if (gamePhase === 'setup') {
+        const engine = getActiveExternalEngine();
+        const externalMove = getExternalMove(engine);
+        if (externalMove && externalMove.place &&
+            isValidPlaceTarget(externalMove.place.b, externalMove.place.c)) {
+          logMessage(`【外部AI判断】SETUP B${externalMove.place.b+1}-${CELL_NAMES[externalMove.place.c]}`);
+          handleCellClick(externalMove.place.b, externalMove.place.c);
+          return;
+        }
+
+        const validTargets = [];
+        for (let b of CORNER_BLOCKS) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
+        const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
+        logMessage(`【BOT判断】SETUP B${choice.b+1}-${CELL_NAMES[choice.c]}`);
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'place') {
+        const engine = getActiveExternalEngine();
+        const externalMove = getExternalMove(engine);
+        if (externalMove && externalMove.place) {
+          const eb = externalMove.place.b;
+          const ec = externalMove.place.c;
+          if (isValidPlaceTarget(eb, ec)) {
+            isWallDeclarationActive = !!externalMove.place.secretRed && wallCount[currentPlayer] > 0;
+            logMessage(`【外部AI判断】PLACE B${eb+1}-${CELL_NAMES[ec]} redMode=${isWallDeclarationActive}`);
+            handleCellClick(eb, ec);
+            return;
+          }
+          if (Number.isInteger(eb) && Number.isInteger(ec) && board[eb] && board[eb][ec] === null && isKoRepeatMove(eb, ec, currentPlayer)) {
+            logMessage(`【コウ禁止】外部AIの B${eb+1}-${CELL_NAMES[ec]} は直前局面の再現になるため却下。`);
+          }
+        }
+
+        // 赤石のランダム申告 (15%の確率)
+        if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
+          isWallDeclarationActive = true;
+        } else {
+          isWallDeclarationActive = false;
+        }
+
+        const validTargets = [];
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
+          }
+        }
+
+        if (validTargets.length === 0) {
+          // v2.5g: PLACE中に合法手がない状態でskipSlide()を呼ぶと何も起きず、
+          // 同じ手番・同じターンを永久反復していた。ここで得点判定して終局する。
+          const sideName = currentPlayer === 'white' ? '白' : '黒';
+          finishByNoLegalMove(`${sideName}に合法な配置手がありません`);
+          return;
+        }
+
+        const choice = chooseBuiltInPlacement(validTargets);
+        logMessage(`【BOT判断】PLACE B${choice.b+1}-${CELL_NAMES[choice.c]} redMode=${isWallDeclarationActive}`);
+        handleCellClick(choice.b, choice.c);
+        return;
+      }
+
+      if (gamePhase === 'slide') {
+        const engine = getActiveExternalEngine();
+        const externalMove = getExternalMove(engine);
+        if (externalMove && externalMove.slide) {
+          if (externalMove.slide.pass === true) {
+            logMessage('【外部AI判断】SLIDE PASS');
+            skipSlide();
+            return;
+          }
+          if (Number.isInteger(externalMove.slide.b) && externalMove.slide.dir) {
+            logMessage(`【外部AI判断】SLIDE B${externalMove.slide.b+1}-${externalMove.slide.dir}`);
+            if (executeSlide(externalMove.slide.b, externalMove.slide.dir)) return;
+          }
+        }
+
+        // ガス局面では、配置時に選んだ安全形をランダムスライドで壊さない。
+        if (gasPhaseActive || emptyCount <= 10) {
+          logMessage('【BOTガス判断】SLIDE PASS（配置後の安全形を維持）');
+          diagnosticContext = 'BOT_GAS_SLIDE_PASS';
+          skipSlide();
+          return;
+        }
+
+        if (Math.random() < 0.4) {
+          logMessage('【BOT判断】SLIDE PASS');
+          diagnosticContext = 'BOT_SLIDE_PASS';
+          skipSlide();
+          return;
+        }
+
+        const availableBlocks = [];
+        for (let b = 0; b < 9; b++) {
+          if (!slideLockedBlocks.includes(b)) availableBlocks.push(b);
+        }
+
+        if (availableBlocks.length === 0) {
+          skipSlide();
+          return;
+        }
+
+        const targetBlock = availableBlocks[Math.floor(Math.random() * availableBlocks.length)];
+        const dirs = ['up', 'down', 'left', 'right'];
+        const chosenDir = dirs[Math.floor(Math.random() * dirs.length)];
+        logMessage(`【BOT判断】SLIDE B${targetBlock+1}-${chosenDir}`);
+        executeSlide(targetBlock, chosenDir);
+        return;
+      }
+    }
+  }
+
+  const testBot = new NineTopologyRestoredTestBot(30);
+
+  function toggleTestBot() {
+    if (testBot.intervalId) {
+      testBot.stop();
+    } else {
+      testBot.start();
+    }
+  }
+
+  // runner.html が外部AIを注入したら、同じ対局ボタン操作として自動開始する。
+  setInterval(() => {
+    const hasExternalEngine = !!(window.NTAI_Engine_White || window.NTAI_Engine_Black || window.NTAI_Engine);
+    if (hasExternalEngine && !externalDuelAutoStarted && !testBot.intervalId && gamePhase !== 'gameover') {
+      externalDuelAutoStarted = true;
+      logMessage('【NTAI接続】外部AIを検出。対局を開始します。');
+      testBot.start();
+    }
+  }, 200);
+
+  function sanitizeHeaderValue(value) {
+    return String(value ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/"/g, "'");
+  }
+
+  function sanitizeFilePart(value) {
+    const cleaned = String(value ?? '')
+      .replace(/[^0-9A-Za-z._-]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return cleaned || 'Default';
+  }
+
+  function downloadNtpnFile() {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    const timeStr = `${hh}:${min}`;
+    const compactStamp = `${yyyy.slice(2)}${mm}${dd}_${hh}${min}`;
+
+    const whiteEngine = window.NTAI_Engine_White || null;
+    const blackEngine = window.NTAI_Engine_Black || null;
+    const whiteName = sanitizeHeaderValue(whiteEngine && whiteEngine.name ? whiteEngine.name : 'Default_Bot_White');
+    const blackName = sanitizeHeaderValue(blackEngine && blackEngine.name ? blackEngine.name : 'Default_Bot_Black');
+
+    let outcome = '*';
+    if (gameEndInfo.winner === 'White') outcome = '1-0';
+    else if (gameEndInfo.winner === 'Black') outcome = '0-1';
+    else if (gameEndInfo.winner === 'Draw') outcome = '1/2-1/2';
+
+    const recordedTurns = gameEndInfo.turns ?? ntpnMoveHistory.length;
+    const detailLine = gameEndInfo.detail
+      ? `[Detail "${sanitizeHeaderValue(gameEndInfo.detail)}"]\n`
+      : '';
+
+    let ntpnContent =
+      `[Game "Nine Topology"]\n` +
+      `[GameVersion "2.8-test"]\n` +
+      `[Date "${dateStr}"]\n` +
+      `[Time "${timeStr}"]\n` +
+      `[White "${whiteName}"]\n` +
+      `[Black "${blackName}"]\n` +
+      `[Winner "${gameEndInfo.winner}"]\n` +
+      `[Outcome "${outcome}"]\n` +
+      `[Result "${playerScores.white}-${playerScores.black}"]\n` +
+      `[BlueSecured "W:${blueStonesSecured.white} B:${blueStonesSecured.black}"]\n` +
+      `[BlueProtectionRemaining "W:${blueProtectionRemaining.white} B:${blueProtectionRemaining.black}"]\n` +
+      `[Reason "${gameEndInfo.reason}"]\n` +
+      `[Turns "${recordedTurns}"]\n` +
+      detailLine +
+      `\n`;
+
+    ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
+
+    const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download =
+      `${compactStamp}_${sanitizeFilePart(whiteName)}-${sanitizeFilePart(blackName)}.ntpn`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logMessage(`対戦記譜(.ntpn)を保存完了！ ${a.download}`);
+  }
+
+  function generateHighlightGIF() {
+    if (boardSnapshots.length < 2) return;
+    logMessage("【GIF抽出】ハイライトアニメーション生成中...");
+    const canvas = document.getElementById('video-canvas');
+    const ctx = canvas.getContext('2d');
+    const stream = canvas.captureStream(30);
+
+    let options = { mimeType: 'image/gif' };
+    if (!MediaRecorder.isTypeSupported('image/gif')) options = { mimeType: 'video/webm' };
+
+    const mediaRecorder = new MediaRecorder(stream, options);
+    const recordedChunks = [];
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: 'image/gif' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `NineTopology_v2.5.3_Highlight.gif`;
+      a.click();
+      URL.revokeObjectURL(url);
+      logMessage(`【GIF抽出完了】ローカルデポジット成功！`);
+    };
+
+    mediaRecorder.start();
+    const slice = boardSnapshots.slice(Math.max(0, boardSnapshots.length - 12));
+    let frame = 0;
+    const interval = setInterval(() => {
+      if (frame >= slice.length) {
+        clearInterval(interval);
+        setTimeout(() => mediaRecorder.stop(), 500);
+        return;
+      }
+      drawBoardToCanvas(ctx, slice[frame].board);
+      frame++;
+    }, 700);
+  }
+
+  // v2.5.3変更点: ガス局面で配置候補ごとの自軍・敵軍中立化数を予測し、被害の少ない手を選択。
+  // ガス中の内蔵BOTはランダムスライドを避け、安全形を維持する。
+  function drawBoardToCanvas(ctx, boardData) {
+    ctx.fillStyle = "#1f2833"; ctx.fillRect(0, 0, 324, 324);
+    ctx.strokeStyle = "#66fcf1"; ctx.lineWidth = 3; ctx.strokeRect(0, 0, 324, 324);
+    for (let b = 0; b < 9; b++) {
+      const bx = (b % 3) * 108 + 4, by = Math.floor(b / 3) * 108 + 4;
+      ctx.fillStyle = "#0b0c10"; ctx.fillRect(bx, by, 100, 100);
+      for (let c = 0; c < 9; c++) {
+        const cx = bx + (c % 3) * 33 + 1, cy = by + Math.floor(c / 3) * 33 + 1;
+        ctx.fillStyle = "#1f2833"; ctx.fillRect(cx, cy, 32, 32);
+        const stone = boardData[b][c];
+        if (stone) {
+          ctx.beginPath(); ctx.arc(cx + 16, cy + 16, 13, 0, Math.PI * 2);
+          if (stone === 'white') ctx.fillStyle = "#ffffff";
+          else if (stone === 'black') ctx.fillStyle = "#4b5d67";
+          else if (stone === 'red') ctx.fillStyle = "#ff0055";
+          else if (stone === 'blue') ctx.fillStyle = "#00d2ff";
+          else if (stone === 'neutral') ctx.fillStyle = "#73787d";
+          else if (stone === 'blue-reserved') ctx.fillStyle = "rgba(0,210,255,0.35)";
+          ctx.fill();
+        }
+      }
+    }
+  }
+</script>
+</body>
+</html>
