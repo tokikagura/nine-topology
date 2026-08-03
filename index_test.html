@@ -75,15 +75,15 @@
 
   const BLUE_SHIELD_PER_STONE = 5;
   const BLUE_DROP_EVENTS = [
-    { id: 'B1', block: 0, turn: 0, initial: true },
-    { id: 'B9', block: 8, turn: 12, initial: false },
-    { id: 'B5', block: 4, turn: 50, initial: false }
+    { id: 'B1', block: 0, cell: 8, turn: 0, initial: true },
+    { id: 'B9', block: 8, cell: 0, turn: 12, initial: false },
+    { id: 'B5', block: 4, cell: 4, turn: 50, initial: false }
   ];
   let blueDropState = { B1: true, B9: false, B5: false };
   let blueProtectionRemaining = { white: 0, black: 0 };
   let blueStonesSecured = { white: 0, black: 0 };
   // 青石で一度守られた石は、以後のガスフェーズでも免疫を維持する。
-  // 盤面と同じ9ブロック×9セルで、スライドにも追従させる。
+  // 盤面と同じ9ブロック×9セルで、保護済みの石にはスライド追従させる。
   let gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
   let gasPhaseActive = false;
 
@@ -643,10 +643,10 @@
     for (const event of BLUE_DROP_EVENTS) {
       if (event.initial || blueDropState[event.id] || turnNumber !== event.turn) continue;
 
-      // 予約マーカーはブロック内スライドに追従するため、現在位置を検索して実体化する。
-      const reservedCell = board[event.block].findIndex(cell => cell === 'blue-reserved');
-      if (reservedCell === -1) {
-        logMessage(`【青石降臨エラー】${event.id}内に予約マーカーが見つかりません。`);
+      // 青石の降臨座標はブロックスライドの影響を受けない固定座標。
+      const reservedCell = event.cell;
+      if (board[event.block][reservedCell] !== 'blue-reserved') {
+        logMessage(`【青石降臨エラー】固定座標 ${event.id}-${CELL_NAMES[reservedCell]} に予約マーカーがありません。`);
         continue;
       }
 
@@ -943,6 +943,28 @@
     }
   }
 
+  function restoreFixedBlueReservations() {
+    for (const event of BLUE_DROP_EVENTS) {
+      if (event.initial || blueDropState[event.id]) continue;
+
+      const block = board[event.block];
+      const fixedCell = event.cell;
+      const movedCell = block.findIndex(cell => cell === 'blue-reserved');
+
+      if (movedCell === fixedCell) continue;
+
+      if (movedCell >= 0) {
+        // スライドで動いた予約マーカーと固定座標の内容を交換する。
+        const displaced = block[fixedCell];
+        block[fixedCell] = 'blue-reserved';
+        block[movedCell] = displaced;
+      } else {
+        // 万一マーカーが失われても、固定座標へ復元する。
+        block[fixedCell] = 'blue-reserved';
+      }
+    }
+  }
+
   function executeSlide(b, direction) {
     if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
     const block = board[b];
@@ -981,6 +1003,9 @@
       let s2 = shieldBlock[2]; shieldBlock[2] = shieldBlock[5]; shieldBlock[5] = shieldBlock[8]; shieldBlock[8] = s2;
       currentTurnMove.slide = `>B${b+1}-U`;
     }
+
+    // 未降臨の青石予約マスは盤面座標に固定し、スライドでは移動させない。
+    restoreFixedBlueReservations();
 
     diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_SLIDE B${b+1}-${direction.toUpperCase()}`;
     let grid = get9x9Grid(board);
