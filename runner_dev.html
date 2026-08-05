@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nine Topology NTAI Development Runner</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    background: #0b0c10;
+    color: #c5c6c7;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  h1 {
+    color: #66fcf1;
+    font-size: 1rem;
+    margin: 4px 0 6px;
+    text-align: center;
+  }
+
+  #version-panel,
+  #ntai-panel {
+    width: 100%;
+    max-width: 340px;
+    box-sizing: border-box;
+    background: rgba(31, 40, 51, 0.92);
+    border: 1px solid #45f3ff;
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 7px;
+  }
+
+  #version-panel {
+    display: grid;
+    grid-template-columns: 72px 1fr auto;
+    gap: 6px;
+    align-items: center;
+    font-size: 0.72rem;
+  }
+
+  select,
+  textarea {
+    box-sizing: border-box;
+    width: 100%;
+    color: #c5f6f3;
+    background: #000;
+    border: 1px solid #45f3ff;
+    border-radius: 4px;
+  }
+
+  select {
+    padding: 6px;
+    font-size: 0.72rem;
+  }
+
+  #iframe-container {
+    width: 342px;
+    height: 590px;
+    background: #000;
+    border: 2px solid #45f3ff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 10px rgba(102, 252, 241, 0.2);
+    margin-bottom: 8px;
+  }
+
+  iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+
+  .section-title {
+    color: #66fcf1;
+    font-weight: bold;
+    font-size: 0.78rem;
+    margin-bottom: 7px;
+  }
+
+  .ai-slot {
+    border: 1px solid #45f3ff;
+    border-radius: 5px;
+    padding: 7px;
+    margin-bottom: 7px;
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  .slot-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 5px;
+  }
+
+  .slot-label {
+    font-weight: bold;
+    font-size: 0.72rem;
+  }
+
+  .slot-label.white { color: #fff; }
+  .slot-label.black { color: #ff6b8a; }
+
+  .file-name {
+    flex: 1;
+    min-width: 0;
+    color: #00d2ff;
+    font-family: monospace;
+    font-size: 0.61rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .slot-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 5px;
+  }
+
+  textarea {
+    height: 60px;
+    padding: 5px;
+    resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6rem;
+    margin-top: 5px;
+  }
+
+  button,
+  .file-btn {
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    box-sizing: border-box;
+  }
+
+  button {
+    background: linear-gradient(135deg, #66fcf1, #45f3ff);
+    color: #0b0c10;
+    padding: 7px 9px;
+    font-size: 0.72rem;
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: wait;
+  }
+
+  .file-btn {
+    display: block;
+    text-align: center;
+    background: #1f2833;
+    color: #66fcf1;
+    border: 1px solid #45f3ff;
+    padding: 6px 8px;
+    font-size: 0.67rem;
+  }
+
+  .clear-btn {
+    background: #59636f;
+    color: #fff;
+    white-space: nowrap;
+  }
+
+  #btn-start {
+    width: 100%;
+    padding: 9px;
+    font-size: 0.8rem;
+  }
+
+  #status-info {
+    margin-top: 7px;
+    padding: 6px;
+    min-height: 2.3em;
+    color: #00d2ff;
+    background: #000;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.65rem;
+    overflow-wrap: anywhere;
+  }
+
+  .note {
+    margin-top: 6px;
+    color: #a3bac3;
+    font-size: 0.62rem;
+    line-height: 1.45;
+  }
+</style>
+</head>
+<body>
+
+<h1>NINE TOPOLOGY NTAI DEVELOPMENT RUNNER</h1>
+
+<div id="version-panel">
+  <label for="game-target"><b>Game</b></label>
+  <select id="game-target">
+    <option value="index.html">v2.7.2 Official (index.html)</option>
+    <option value="index_test.html">v2.8-test (index_test.html)</option>
+  </select>
+  <button type="button" onclick="reloadGame()">Reload</button>
+</div>
+
+<div id="iframe-container">
+  <iframe id="game-frame" src="index.html" title="Nine Topology game board"></iframe>
+</div>
+
+<div id="ntai-panel">
+  <div class="section-title">Local NTAI Test Slots</div>
+
+  <div class="ai-slot">
+    <div class="slot-head">
+      <span class="slot-label white">White AI</span>
+      <span id="name-white" class="file-name">Built-in Bot</span>
+    </div>
+    <div class="slot-actions">
+      <label class="file-btn" for="file-white">Select .ntai / .js file</label>
+      <button class="clear-btn" type="button" onclick="clearSlot('white')">Clear</button>
+    </div>
+    <input type="file" id="file-white" accept=".ntai,.js,.txt,text/plain,application/javascript" hidden>
+    <textarea id="code-white" spellcheck="false" placeholder="Optional: paste White AI code here. Leave blank to use the built-in bot."></textarea>
+  </div>
+
+  <div class="ai-slot">
+    <div class="slot-head">
+      <span class="slot-label black">Black AI</span>
+      <span id="name-black" class="file-name">Built-in Bot</span>
+    </div>
+    <div class="slot-actions">
+      <label class="file-btn" for="file-black">Select .ntai / .js file</label>
+      <button class="clear-btn" type="button" onclick="clearSlot('black')">Clear</button>
+    </div>
+    <input type="file" id="file-black" accept=".ntai,.js,.txt,text/plain,application/javascript" hidden>
+    <textarea id="code-black" spellcheck="false" placeholder="Optional: paste Black AI code here. Leave blank to use the built-in bot."></textarea>
+  </div>
+
+  <button id="btn-start" type="button" onclick="startDuel()">Set AIs and Start Match</button>
+
+  <div id="status-info">Waiting for the game frame.</div>
+  <div class="note">
+    This page is for local development tests. The public AI selector inside index.html is hidden only inside this runner.
+    A blank slot uses the built-in bot.
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const frame = document.getElementById('game-frame');
+  const startButton = document.getElementById('btn-start');
+  const statusInfo = document.getElementById('status-info');
+  const loadedCode = { white: '', black: '' };
+  const loadedFileName = { white: '', black: '' };
+  let frameReady = false;
+
+  function setStatus(message, isError = false) {
+    statusInfo.textContent = message;
+    statusInfo.style.color = isError ? '#ff6b8a' : '#00d2ff';
+  }
+
+  function gameWindow() {
+    return frame.contentWindow;
+  }
+
+  function hidePublicSelector() {
+    try {
+      const doc = frame.contentDocument;
+      const panel = doc && doc.getElementById('ai-selector-panel');
+      if (panel) panel.style.display = 'none';
+    } catch (error) {
+      setStatus(`Could not prepare game frame: ${error.message}`, true);
+    }
+  }
+
+  function verifyGameApi(win) {
+    const required = ['initGame', 'logMessage'];
+    for (const name of required) {
+      if (typeof win[name] !== 'function') {
+        throw new Error(`${name}() is not available. Check the selected game file.`);
+      }
+    }
+    if (!win.testBot || typeof win.testBot.start !== 'function') {
+      throw new Error('testBot.start() is not available.');
+    }
+  }
+
+  frame.addEventListener('load', () => {
+    frameReady = false;
+    try {
+      const win = gameWindow();
+      verifyGameApi(win);
+      hidePublicSelector();
+      frameReady = true;
+      startButton.disabled = false;
+      setStatus(`Ready: ${document.getElementById('game-target').selectedOptions[0].textContent}`);
+    } catch (error) {
+      startButton.disabled = true;
+      setStatus(`Game frame error: ${error.message}`, true);
+    }
+  });
+
+  window.reloadGame = function reloadGame() {
+    const target = document.getElementById('game-target').value;
+    frameReady = false;
+    startButton.disabled = true;
+    setStatus(`Loading ${target}...`);
+    frame.src = `${target}?runner=${Date.now()}`;
+  };
+
+  async function loadFile(side, file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      loadedCode[side] = text;
+      loadedFileName[side] = file.name;
+      document.getElementById(`code-${side}`).value = text;
+      document.getElementById(`name-${side}`).textContent = file.name;
+      setStatus(`${side === 'white' ? 'White' : 'Black'} loaded: ${file.name}`);
+    } catch (error) {
+      setStatus(`File read failed: ${error.message}`, true);
+    }
+  }
+
+  document.getElementById('file-white').addEventListener('change', event => {
+    loadFile('white', event.target.files[0]);
+  });
+
+  document.getElementById('file-black').addEventListener('change', event => {
+    loadFile('black', event.target.files[0]);
+  });
+
+  window.clearSlot = function clearSlot(side) {
+    loadedCode[side] = '';
+    loadedFileName[side] = '';
+    document.getElementById(`code-${side}`).value = '';
+    document.getElementById(`file-${side}`).value = '';
+    document.getElementById(`name-${side}`).textContent = 'Built-in Bot';
+    setStatus(`${side === 'white' ? 'White' : 'Black'} slot cleared.`);
+  };
+
+  function clearInjectedState(win) {
+    if (win.testBot && win.testBot.intervalId) {
+      win.testBot.stop('Development runner reset');
+    }
+
+    win.document.getElementById('ntai-script-white')?.remove();
+    win.document.getElementById('ntai-script-black')?.remove();
+
+    win.NTAI_Engine_White = null;
+    win.NTAI_Engine_Black = null;
+    win.NTAI_Engine = null;
+    win.externalDuelAutoStarted = false;
+  }
+
+  function injectEngine(win, side, code) {
+    if (!code.trim()) return null;
+
+    const sideGlobal = side === 'white'
+      ? 'NTAI_Engine_White'
+      : 'NTAI_Engine_Black';
+
+    const script = win.document.createElement('script');
+    script.id = `ntai-script-${side}`;
+    script.textContent = `
+      (function () {
+        window.NTAI_Engine = null;
+        ${code}
+        if (!window.NTAI_Engine ||
+            typeof window.NTAI_Engine.decideNextMove !== 'function') {
+          throw new Error(${JSON.stringify(
+            `${side}: window.NTAI_Engine.decideNextMove was not registered`
+          )});
+        }
+        window.${sideGlobal} = window.NTAI_Engine;
+        window.NTAI_Engine = null;
+      })();
+    `;
+
+    win.document.body.appendChild(script);
+
+    const engine = win[sideGlobal];
+    if (!engine || typeof engine.decideNextMove !== 'function') {
+      throw new Error(`${side}: engine injection failed`);
+    }
+    return engine;
+  }
+
+  function selectedCode(side) {
+    const pasted = document.getElementById(`code-${side}`).value.trim();
+    return pasted || loadedCode[side];
+  }
+
+  window.startDuel = function startDuel() {
+    if (!frameReady) {
+      setStatus('The game frame is not ready yet.', true);
+      return;
+    }
+
+    startButton.disabled = true;
+
+    try {
+      const win = gameWindow();
+      verifyGameApi(win);
+
+      const codeWhite = selectedCode('white');
+      const codeBlack = selectedCode('black');
+
+      clearInjectedState(win);
+      win.initGame();
+      hidePublicSelector();
+
+      const engineWhite = injectEngine(win, 'white', codeWhite);
+      const engineBlack = injectEngine(win, 'black', codeBlack);
+
+      const nameWhite = engineWhite?.name || 'Default_Bot_White';
+      const nameBlack = engineBlack?.name || 'Default_Bot_Black';
+
+      document.getElementById('name-white').textContent =
+        engineWhite?.name || loadedFileName.white || 'Built-in Bot';
+      document.getElementById('name-black').textContent =
+        engineBlack?.name || loadedFileName.black || 'Built-in Bot';
+
+      win.logMessage(`【DEV RUNNER】白=${nameWhite} / 黒=${nameBlack}`);
+
+      // Prevent the game's polling hook from starting a duplicate interval.
+      win.externalDuelAutoStarted = true;
+      win.testBot.start();
+
+      setStatus(`Running: White ${nameWhite} / Black ${nameBlack}`);
+    } catch (error) {
+      try {
+        clearInjectedState(gameWindow());
+      } catch (_) {}
+      setStatus(`Start failed: ${error.message}`, true);
+    } finally {
+      startButton.disabled = false;
+    }
+  };
+})();
+</script>
+
+</body>
+</html>
