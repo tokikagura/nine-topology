@@ -1,0 +1,18 @@
+{
+  "ruleVersion": "2.7.2",
+  "groups": [
+    {
+      "id": "builtin",
+      "label": "Built-in",
+      "models": [
+        {
+          "id": "default-bot",
+          "name": "Default Bot",
+          "version": "2.7.2",
+          "latest": true,
+          "type": "builtin"
+        }
+      ]
+    }
+  ]
+}
