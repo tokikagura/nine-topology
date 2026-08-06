@@ -285,57 +285,20 @@
     }
   }
 
-  function missingGameApi(win) {
-    const required = ['initGame', 'logMessage', 'toggleTestBot'];
-    return required.filter(name => typeof win[name] !== 'function');
-  }
-
   function verifyGameApi(win) {
-    const missing = missingGameApi(win);
-    if (missing.length > 0) {
-      const bootError = win.__NINE_TOPOLOGY_BOOT_ERROR__;
-      if (bootError) {
-        throw new Error(bootError);
+    const required = ['initGame', 'logMessage', 'toggleTestBot'];
+    for (const name of required) {
+      if (typeof win[name] !== 'function') {
+        throw new Error(`${name}() is not available. Check the selected game file.`);
       }
-      throw new Error(`${missing.join(', ')} unavailable. Check the selected game files.`);
     }
   }
 
-  function wait(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  async function waitForGameApi(timeoutMs = 5000) {
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-      const win = gameWindow();
-
-      if (win.__NINE_TOPOLOGY_BOOT_ERROR__) {
-        throw new Error(win.__NINE_TOPOLOGY_BOOT_ERROR__);
-      }
-
-      if (missingGameApi(win).length === 0) {
-        return win;
-      }
-
-      await wait(100);
-    }
-
-    const win = gameWindow();
-    const missing = missingGameApi(win);
-    throw new Error(
-      `${missing.join(', ')} unavailable after ${timeoutMs / 1000}s. ` +
-      `Reload the game after the GitHub Pages update finishes.`
-    );
-  }
-
-  frame.addEventListener('load', async () => {
+  frame.addEventListener('load', () => {
     frameReady = false;
-    startButton.disabled = true;
-
     try {
-      await waitForGameApi();
+      const win = gameWindow();
+      verifyGameApi(win);
       hidePublicSelector();
       frameReady = true;
       startButton.disabled = false;
