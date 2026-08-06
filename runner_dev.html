@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nine Topology NTAI Development Runner</title>
+<title>Nine Topology NTAI Development Runner v2.8-waitfix</title>
 <style>
   :root {
     color-scheme: dark;
@@ -202,7 +202,7 @@
 </head>
 <body>
 
-<h1>NINE TOPOLOGY NTAI DEVELOPMENT RUNNER</h1>
+<h1>NINE TOPOLOGY NTAI DEVELOPMENT RUNNER v2.8-waitfix</h1>
 
 <div id="version-panel">
   <label for="game-target"><b>Game</b></label>
@@ -264,7 +264,11 @@
   const statusInfo = document.getElementById('status-info');
   const loadedCode = { white: '', black: '' };
   const loadedFileName = { white: '', black: '' };
+  const REQUIRED_GAME_API = ['initGame', 'logMessage', 'toggleTestBot'];
+  const API_WAIT_TIMEOUT_MS = 8000;
+  const API_POLL_INTERVAL_MS = 100;
   let frameReady = false;
+  let frameLoadSequence = 0;
 
   function setStatus(message, isError = false) {
     statusInfo.textContent = message;
@@ -285,25 +289,63 @@
     }
   }
 
+  function missingGameApi(win) {
+    return REQUIRED_GAME_API.filter(name => typeof win[name] !== 'function');
+  }
+
   function verifyGameApi(win) {
-    const required = ['initGame', 'logMessage', 'toggleTestBot'];
-    for (const name of required) {
-      if (typeof win[name] !== 'function') {
-        throw new Error(`${name}() is not available. Check the selected game file.`);
-      }
+    const missing = missingGameApi(win);
+    if (missing.length > 0) {
+      throw new Error(`${missing.join(', ')} not available. Check the selected game file.`);
     }
   }
 
-  frame.addEventListener('load', () => {
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function waitForGameApi(win, sequence) {
+    const deadline = Date.now() + API_WAIT_TIMEOUT_MS;
+    let lastDetail = 'waiting for document';
+
+    while (Date.now() < deadline) {
+      if (sequence !== frameLoadSequence) {
+        throw new Error('Frame load was replaced by a newer reload.');
+      }
+
+      try {
+        const doc = win.document;
+        const missing = missingGameApi(win);
+        lastDetail = `readyState=${doc.readyState}, missing=${missing.join(', ') || 'none'}`;
+        if (missing.length === 0) return;
+      } catch (error) {
+        lastDetail = error.message;
+      }
+
+      await sleep(API_POLL_INTERVAL_MS);
+    }
+
+    throw new Error(`Game API timeout after ${API_WAIT_TIMEOUT_MS / 1000}s (${lastDetail})`);
+  }
+
+  frame.addEventListener('load', async () => {
+    const sequence = ++frameLoadSequence;
     frameReady = false;
+    startButton.disabled = true;
+    setStatus('Game frame loaded. Waiting for API...');
+
     try {
       const win = gameWindow();
+      await waitForGameApi(win, sequence);
+      if (sequence !== frameLoadSequence) return;
+
       verifyGameApi(win);
       hidePublicSelector();
       frameReady = true;
       startButton.disabled = false;
       setStatus(`Ready: ${document.getElementById('game-target').selectedOptions[0].textContent}`);
     } catch (error) {
+      if (sequence !== frameLoadSequence) return;
       startButton.disabled = true;
       setStatus(`Game frame error: ${error.message}`, true);
     }
@@ -311,6 +353,7 @@
 
   window.reloadGame = function reloadGame() {
     const target = document.getElementById('game-target').value;
+    frameLoadSequence++;
     frameReady = false;
     startButton.disabled = true;
     setStatus(`Loading ${target}...`);
@@ -435,9 +478,10 @@
 
       win.logMessage(`【DEV RUNNER】白=${nameWhite} / 黒=${nameBlack}`);
 
-      // index.html already polls for injected NTAI engines and starts the match.
-      // Do not call the internal testBot directly because it is not a window property.
-      setStatus(`AIs set: White ${nameWhite} / Black ${nameBlack}. Starting...`);
+      // toggleTestBot() is the public start/stop API exposed by the game page.
+      // Starting explicitly avoids depending on the game's 200ms external-engine polling.
+      win.toggleTestBot();
+      setStatus(`Match started: White ${nameWhite} / Black ${nameBlack}`);
     } catch (error) {
       try {
         clearInjectedState(gameWindow());
