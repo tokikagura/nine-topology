@@ -46,10 +46,7 @@ let board = Array.from({length: 9}, () => Array(9).fill(null));
 
   const CORNER_BLOCKS = [0, 2, 6, 8];
   const CELL_NAMES = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"];
-
-  window.onload = function() { initGame(); };
-
-  function initGame() {
+function initGame() {
     board = Array.from({length: 9}, () => Array(9).fill(null));
     emptyCount = 81;
     wallCount = { white: 5, black: 5 };
