@@ -1,7 +1,4 @@
-/* Nine Topology v2.8-test: board rendering override
-   Loaded after the shared v2.7.2 module and replaces only rule-dependent functions. */
-
-function renderBoard() {
+  function renderBoard() {
     const container = document.getElementById('board-container');
     container.innerHTML = '';
 
@@ -23,9 +20,6 @@ function renderBoard() {
         if (stoneType) {
           const stoneEl = document.createElement('div');
           stoneEl.className = `stone ${stoneType}`;
-          if ((stoneType === 'white' || stoneType === 'black') && gasProtectedBoard[b][c]) {
-            stoneEl.classList.add('gas-shielded');
-          }
           cellEl.appendChild(stoneEl);
         }
 

@@ -1,7 +1,17 @@
-/* Nine Topology v2.8-test: NTPN export override
-   Loaded after the shared v2.7.2 module and replaces only rule-dependent functions. */
+  function sanitizeHeaderValue(value) {
+    return String(value ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/"/g, "'");
+  }
 
-function downloadNtpnFile() {
+  function sanitizeFilePart(value) {
+    const cleaned = String(value ?? '')
+      .replace(/[^0-9A-Za-z._-]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return cleaned || 'Default';
+  }
+
+  function downloadNtpnFile() {
     const now = new Date();
     const yyyy = String(now.getFullYear());
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -28,9 +38,18 @@ function downloadNtpnFile() {
       ? `[Detail "${sanitizeHeaderValue(gameEndInfo.detail)}"]\n`
       : '';
 
+    // v2.8系の青石保護情報は、その機能を持つマップでのみ出力する。
+    // 標準マップ（v2.7.2）では変数自体が存在しないため、ヘッダを増やさない。
+    let blueRuleLines = '';
+    if (typeof blueStonesSecured !== 'undefined' && typeof blueProtectionRemaining !== 'undefined') {
+      blueRuleLines =
+        `[BlueSecured "W:${blueStonesSecured.white} B:${blueStonesSecured.black}"]\n` +
+        `[BlueProtectionRemaining "W:${blueProtectionRemaining.white} B:${blueProtectionRemaining.black}"]\n`;
+    }
+
     let ntpnContent =
       `[Game "Nine Topology"]\n` +
-      `[GameVersion "2.8-test"]\n` +
+      `[GameVersion "2.7.2"]\n` +
       `[Date "${dateStr}"]\n` +
       `[Time "${timeStr}"]\n` +
       `[White "${whiteName}"]\n` +
@@ -38,8 +57,7 @@ function downloadNtpnFile() {
       `[Winner "${gameEndInfo.winner}"]\n` +
       `[Outcome "${outcome}"]\n` +
       `[Result "${playerScores.white}-${playerScores.black}"]\n` +
-      `[BlueSecured "W:${blueStonesSecured.white} B:${blueStonesSecured.black}"]\n` +
-      `[BlueProtectionRemaining "W:${blueProtectionRemaining.white} B:${blueProtectionRemaining.black}"]\n` +
+      blueRuleLines +
       `[Reason "${gameEndInfo.reason}"]\n` +
       `[Turns "${recordedTurns}"]\n` +
       detailLine +
@@ -47,10 +65,11 @@ function downloadNtpnFile() {
 
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
 
-    // 棋譜末尾に機械可読な終局イベントを1行追加する。
-    // 既存ヘッダと着手記録は変更せず、終局済みの場合だけ出力する。
+    // v2.8棋譜形式: 終局済みの場合、末尾へ機械可読な終局イベントを追加する。
     if (gameEndInfo.winner !== 'IN_PROGRESS') {
-      ntpnContent += `[EVENT:GAME_END reason=${gameEndInfo.reason} winner=${gameEndInfo.winner} outcome=${outcome} result=${playerScores.white}-${playerScores.black} turns=${recordedTurns}]\n`;
+      ntpnContent +=
+        `[EVENT:GAME_END reason=${gameEndInfo.reason} winner=${gameEndInfo.winner} ` +
+        `outcome=${outcome} result=${playerScores.white}-${playerScores.black} turns=${recordedTurns}]\n`;
     }
 
     const blob = new Blob([ntpnContent], { type: 'text/plain;charset=utf-8' });
