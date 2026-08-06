@@ -286,14 +286,11 @@
   }
 
   function verifyGameApi(win) {
-    const required = ['initGame', 'logMessage'];
+    const required = ['initGame', 'logMessage', 'toggleTestBot'];
     for (const name of required) {
       if (typeof win[name] !== 'function') {
         throw new Error(`${name}() is not available. Check the selected game file.`);
       }
-    }
-    if (!win.testBot || typeof win.testBot.start !== 'function') {
-      throw new Error('testBot.start() is not available.');
     }
   }
 
@@ -352,8 +349,12 @@
   };
 
   function clearInjectedState(win) {
-    if (win.testBot && win.testBot.intervalId) {
-      win.testBot.stop('Development runner reset');
+    // testBot is a top-level const in the game page, so it is not exposed as window.testBot.
+    // Stop it through the public toggle function when the game button indicates a running match.
+    const botButton = win.document.getElementById('btn-toggle-bot');
+    if (botButton && botButton.textContent.includes('対局中') &&
+        typeof win.toggleTestBot === 'function') {
+      win.toggleTestBot();
     }
 
     win.document.getElementById('ntai-script-white')?.remove();
@@ -362,7 +363,6 @@
     win.NTAI_Engine_White = null;
     win.NTAI_Engine_Black = null;
     win.NTAI_Engine = null;
-    win.externalDuelAutoStarted = false;
   }
 
   function injectEngine(win, side, code) {
@@ -435,11 +435,9 @@
 
       win.logMessage(`【DEV RUNNER】白=${nameWhite} / 黒=${nameBlack}`);
 
-      // Prevent the game's polling hook from starting a duplicate interval.
-      win.externalDuelAutoStarted = true;
-      win.testBot.start();
-
-      setStatus(`Running: White ${nameWhite} / Black ${nameBlack}`);
+      // index.html already polls for injected NTAI engines and starts the match.
+      // Do not call the internal testBot directly because it is not a window property.
+      setStatus(`AIs set: White ${nameWhite} / Black ${nameBlack}. Starting...`);
     } catch (error) {
       try {
         clearInjectedState(gameWindow());
