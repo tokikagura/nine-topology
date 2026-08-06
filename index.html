@@ -35,6 +35,11 @@
   button { background: linear-gradient(135deg, #66fcf1, #45f3ff); border: none; color: #0b0c10; padding: 6px 10px; font-weight: bold; border-radius: 4px; margin: 2px; cursor: pointer; font-size: 0.75rem; transition: opacity 0.2s; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   #log-panel { width: 100%; max-width: 340px; height: 80px; overflow-y: auto; background: #000; border: 1px solid #45f3ff; border-radius: 4px; margin-top: 4px; padding: 4px; box-sizing: border-box; font-family: monospace; font-size: 0.65rem; color: #66fcf1; text-align: left; }
+
+  #winner-banner { display:none; width:100%; max-width:340px; box-sizing:border-box; margin:0 0 6px; padding:8px 10px; border:2px solid #66fcf1; border-radius:6px; background:rgba(0,0,0,.92); text-align:center; font-weight:800; font-size:1.05rem; letter-spacing:.03em; }
+  #winner-banner.white-win { color:#fff; text-shadow:0 0 8px rgba(255,255,255,.7); }
+  #winner-banner.black-win { color:#ff6b8a; text-shadow:0 0 8px rgba(255,107,138,.7); }
+  #winner-banner.draw { color:#66fcf1; }
 </style>
 </head>
 <body>
@@ -51,6 +56,7 @@
   <button id="btn-start-selected-ai" onclick="startSelectedBattle()" disabled>AIをセットして対局開始</button>
   <div id="ai-loader-status">AI名簿を読み込み中...</div>
 </div>
+<div id="winner-banner" role="status" aria-live="polite"></div>
 <div id="status-panel">
   <div class="flex-row"><span><b>手番:</b> <span id="current-player" style="color:#66fcf1;">先手 (白)</span></span><span><b>ターン:</b> <span id="turn-count" style="color:#66fcf1;">1</span> (空き:<span id="empty-count">81</span>)</span></div>
   <div class="flex-row"><span><b id="white-role-label">白 (先手):</b> <span id="score-p1" style="color:#fff;">0 pt</span> (壁残:<span id="wall-p1">5</span>)</span><span><b id="black-role-label">黒 (後手):</b> <span id="score-p2" style="color:#a3bac3;">0 pt</span> (壁残:<span id="wall-p2">5</span>)</span></div>
@@ -82,5 +88,88 @@
 <script src="js/record.js"></script>
 <script src="js/media.js"></script>
 <script src="js/ai-loader.js"></script>
+
+<script>
+(() => {
+  'use strict';
+
+  const banner = document.getElementById('winner-banner');
+  let lastLogText = '';
+
+  function readScore(id) {
+    const text = document.getElementById(id)?.textContent || '';
+    const match = text.match(/-?\d+/);
+    return match ? Number(match[0]) : NaN;
+  }
+
+  function resetWinnerBanner() {
+    if (!banner) return;
+    banner.style.display = 'none';
+    banner.textContent = '';
+    banner.className = '';
+  }
+
+  function showWinner(winner) {
+    if (!banner || !winner) return;
+
+    const whiteScore = readScore('score-p1');
+    const blackScore = readScore('score-p2');
+    const score = Number.isFinite(whiteScore) && Number.isFinite(blackScore)
+      ? `  ${whiteScore} - ${blackScore}`
+      : '';
+    const normalized = String(winner).toLowerCase();
+
+    banner.className = '';
+    if (normalized === 'white') {
+      banner.textContent = `⚪ WHITE WINS${score}`;
+      banner.classList.add('white-win');
+    } else if (normalized === 'black') {
+      banner.textContent = `⚫ BLACK WINS${score}`;
+      banner.classList.add('black-win');
+    } else {
+      banner.textContent = `DRAW${score}`;
+      banner.classList.add('draw');
+    }
+    banner.style.display = 'block';
+  }
+
+  function inspectGameEnd() {
+    if (window.gameEndInfo?.winner) {
+      showWinner(window.gameEndInfo.winner);
+      return;
+    }
+
+    const logText = document.getElementById('log-panel')?.textContent || '';
+    if (!logText || logText === lastLogText) return;
+    lastLogText = logText;
+    const tail = logText.slice(-1800);
+
+    if (/winner\s*[=:]\s*white|white wins|白(?:の)?勝(?:利|ち)/i.test(tail)) {
+      showWinner('white');
+    } else if (/winner\s*[=:]\s*black|black wins|黒(?:の)?勝(?:利|ち)/i.test(tail)) {
+      showWinner('black');
+    } else if (/winner\s*[=:]\s*draw|\bdraw\b|引き分け/i.test(tail)) {
+      showWinner('draw');
+    }
+  }
+
+  const originalInitGame = window.initGame;
+  if (typeof originalInitGame === 'function') {
+    window.initGame = function (...args) {
+      resetWinnerBanner();
+      lastLogText = '';
+      return originalInitGame.apply(this, args);
+    };
+  }
+
+  new MutationObserver(inspectGameEnd).observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true
+  });
+  setInterval(inspectGameEnd, 500);
+})();
+</script>
+
 </body>
 </html>
