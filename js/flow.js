@@ -1,78 +1,87 @@
-  function logMessage(msg) {
-    const logPanel = document.getElementById('log-panel');
-    if (!logPanel) return;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    logPanel.innerHTML += `[${time}] ${msg}<br>`;
-    logPanel.scrollTop = logPanel.scrollHeight;
+/* Nine Topology v2.8-test: Blue event, Gas, status, and slide overrides
+   Loaded after the shared v2.7.2 module and replaces only rule-dependent functions. */
+
+function checkBlueStoneDrop() {
+    if (gamePhase !== 'place') return;
+
+    for (const event of BLUE_DROP_EVENTS) {
+      if (event.initial || blueDropState[event.id] || turnNumber !== event.turn) continue;
+
+      // 青石の降臨座標はブロックスライドの影響を受けない固定座標。
+      const reservedCell = event.cell;
+      if (board[event.block][reservedCell] !== 'blue-reserved') {
+        logMessage(`【青石降臨エラー】固定座標 ${event.id}-${CELL_NAMES[reservedCell]} に予約マーカーがありません。`);
+        continue;
+      }
+
+      board[event.block][reservedCell] = 'blue';
+      blueDropState[event.id] = true;
+      const dropCellName = CELL_NAMES[reservedCell];
+      appendTurnEvent(`[EVENT:BLUE_DROP ${event.id}-${dropCellName} turn=${turnNumber}]`);
+      logMessage(`【青石降臨】ターン${turnNumber}、青石が ${event.id}-${dropCellName} に出現。確保しても得点はなく、ガス保護枠5を得ます。`);
+
+      // すでに完全包囲されていれば、降臨直後に手番側が確保する。
+      const grid = get9x9Grid(board);
+      const globalR = Math.floor(event.block / 3) * 3 + Math.floor(reservedCell / 3);
+      const globalC = (event.block % 3) * 3 + (reservedCell % 3);
+      const res = getGroupLiberties(grid, globalR, globalC);
+      if (res.liberties === 0) {
+        res.group.forEach(pos => { grid[pos.r][pos.c] = null; });
+        set9x9GridToBoard(grid, board);
+        secureBlueStones(currentPlayer, res.group.length, '降臨時包囲');
+        appendTurnEvent(`[EVENT:BLUE_SECURED owner=${currentPlayer} count=${res.group.length}]`);
+      }
+    }
   }
 
-  function checkBlueStoneDrop() {
-    if (blueStoneDropped || turnNumber !== SEASON_DROP_TURN || gamePhase !== 'place') return;
+function chooseGasProtectedTargets(grid, targets, color, limit) {
+    if (limit <= 0) return [];
+    const targetKeys = new Set(
+      [...targets.values()]
+        .filter(t => t.from === color && !isGasProtectedAt(t.r, t.c))
+        .map(t => `${t.r},${t.c}`)
+    );
+    if (targetKeys.size === 0) return [];
 
-    // v2.5e: B3をスライドすると予約マーカーも移動するため、
-    // 固定のb2ではなくB3内の現在位置を検索して実体化する。
-    const reservedCell = board[2].findIndex(cell => cell === 'blue-reserved');
-    if (reservedCell === -1) {
-      logMessage('【青石降臨エラー】B3内に予約マーカーが見つからないため降臨を停止しました。');
-      return;
+    const checked = Array.from({length: 9}, () => Array(9).fill(false));
+    const damagedGroups = [];
+
+    for (const key of targetKeys) {
+      const [r, c] = key.split(',').map(Number);
+      if (checked[r][c]) continue;
+      const group = getGroupLiberties(grid, r, c).group;
+      group.forEach(pos => { checked[pos.r][pos.c] = true; });
+      const threatened = group.filter(pos => targetKeys.has(`${pos.r},${pos.c}`));
+      damagedGroups.push({
+        groupSize: group.length,
+        threatened,
+        firstKey: threatened.map(pos => `${String(pos.r).padStart(2,'0')},${String(pos.c).padStart(2,'0')}`).sort()[0]
+      });
     }
 
-    board[2][reservedCell] = 'blue';
-    blueStoneDropped = true;
-    const dropCellName = CELL_NAMES[reservedCell];
-    appendTurnEvent(`[EVENT:BLUE_DROP B3-${dropCellName}]`);
-    logMessage(`【シーズン環境イベント】青石が B3-${dropCellName} にドロップ降臨いたしました！`);
-  }
+    damagedGroups.sort((a, b) =>
+      b.threatened.length - a.threatened.length ||
+      b.groupSize - a.groupSize ||
+      a.firstKey.localeCompare(b.firstKey)
+    );
 
-  function commitTurnMove() {
-    if (!currentTurnMove.place) return;
-
-    const pSide = currentPlayer === 'white' ? 'W' : 'B';
-    const placeStr = `${pSide}${currentTurnMove.place}`;
-    const slideStr = currentTurnMove.slide ? `${pSide}${currentTurnMove.slide}` : `${pSide}>PASS`;
-    const eventPrefix = currentTurnMove.event ? `${currentTurnMove.event} ` : '';
-
-    const fullMoveStr = `${eventPrefix}${placeStr} / ${slideStr}`;
-    ntpnMoveHistory.push(`${turnNumber}. ${fullMoveStr}`);
-
-    logMessage(`[記譜] ${turnNumber}. ${fullMoveStr}`);
-    saveBoardSnapshot();
-
-    // v2.5f: 128手目を記録した直後、その場で得点判定して完全停止する。
-    // 15個捕獲ですでに終局している場合は、そちらの結果を優先する。
-    if (gamePhase !== 'gameover' && turnNumber >= MAX_TURNS) {
-      currentTurnMove = { place: null, slide: null, event: null };
-      finishByTurnLimit();
-      return true;
+    const protectedTargets = [];
+    for (const group of damagedGroups) {
+      const ordered = [...group.threatened].sort((a, b) => a.r - b.r || a.c - b.c);
+      for (const pos of ordered) {
+        if (protectedTargets.length >= limit) return protectedTargets;
+        protectedTargets.push(pos);
+      }
     }
-
-    turnNumber++;
-    currentTurnMove = { place: null, slide: null, event: null };
-    return false;
+    return protectedTargets;
   }
 
-  function countEmptyCells() {
-    let count = 0;
-    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) count++;
-    return count;
-  }
-
-
-  function appendTurnEvent(eventText) {
-    currentTurnMove.event = currentTurnMove.event
-      ? `${currentTurnMove.event} ${eventText}`
-      : eventText;
-  }
-
-  // v2.5.3: 空き10以下でガスフェーズ開始。
-  // その手の終了時点に存在する空きマスを発生源として、上下左右の白石・黒石を
-  // 同時に中立石へ変換する。得点・空きマス化・連鎖は発生しない。
-  function processEndOfTurnGas() {
+function processEndOfTurnGas() {
     emptyCount = countEmptyCells();
 
     if (!gasPhaseActive && emptyCount <= 10) {
       gasPhaseActive = true;
-      logMessage(`【ガスフェーズ開始】空き${emptyCount}。空きマス周辺の通常石が中立化します。`);
+      logMessage(`【ガスフェーズ開始】空き${emptyCount}。青石保護枠を適用後、空きマス周辺の通常石が中立化します。`);
       appendTurnEvent(`[EVENT:GAS_START empty=${emptyCount}]`);
     }
 
@@ -83,7 +92,6 @@
     const dr = [-1, 1, 0, 0];
     const dc = [0, 0, -1, 1];
 
-    // 変換前の盤面だけを参照して対象を確定するため、この処理内では連鎖しない。
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
         if (grid[r][c] !== null) continue;
@@ -100,20 +108,48 @@
 
     if (targets.size === 0) return 0;
 
+    const protectedKeys = new Set();
+    for (const [key, target] of targets.entries()) {
+      if (isGasProtectedAt(target.r, target.c)) protectedKeys.add(key);
+    }
+
+    for (const color of ['white', 'black']) {
+      const protectedList = chooseGasProtectedTargets(
+        grid,
+        targets,
+        color,
+        blueProtectionRemaining[color]
+      );
+      if (protectedList.length > 0) {
+        protectedList.forEach(pos => {
+          protectedKeys.add(`${pos.r},${pos.c}`);
+          setGasProtectedAt(pos.r, pos.c, true);
+        });
+        blueProtectionRemaining[color] -= protectedList.length;
+        const labels = protectedList.map(coordLabel).join(',');
+        appendTurnEvent(`[EVENT:BLUE_PROTECT owner=${color} count=${protectedList.length} cells=${labels}]`);
+        logMessage(`【青石保護】${color === 'white' ? '白' : '黒'}の${protectedList.length}石を恒久防御。ガス免疫として盤面移動にも追従。保護残り${blueProtectionRemaining[color]}。`);
+      }
+    }
+
     const changed = [];
-    for (const target of targets.values()) {
+    for (const [key, target] of targets.entries()) {
+      if (protectedKeys.has(key)) continue;
+      setGasProtectedAt(target.r, target.c, false);
       grid[target.r][target.c] = 'neutral';
       changed.push(`${coordLabel(target)}:${target.from === 'white' ? 'W' : 'B'}>N`);
     }
 
     set9x9GridToBoard(grid, board);
     emptyCount = countEmptyCells();
-    appendTurnEvent(`[EVENT:GAS_NEUTRALIZE ${changed.join(',')}]`);
-    logMessage(`【ガス中立化】${targets.size}個の石が中立石へ変化。得点加算・空き増加なし。`);
-    return targets.size;
+    if (changed.length > 0) {
+      appendTurnEvent(`[EVENT:GAS_NEUTRALIZE ${changed.join(',')}]`);
+    }
+    logMessage(`【ガス処理】対象${targets.size}石 / 保護${protectedKeys.size}石 / 中立化${changed.length}石。得点加算・空き増加なし。`);
+    return changed.length;
   }
 
-  function updateStatusPanel() {
+function updateStatusPanel() {
     emptyCount = countEmptyCells();
 
     const isCurrentStarter = currentPlayer === startingPlayer;
@@ -130,6 +166,8 @@
     document.getElementById('score-p2').innerText = `${playerScores.black} pt`;
     document.getElementById('wall-p1').innerText = wallCount.white;
     document.getElementById('wall-p2').innerText = wallCount.black;
+    document.getElementById('blue-shield-p1').innerText = blueProtectionRemaining.white;
+    document.getElementById('blue-shield-p2').innerText = blueProtectionRemaining.black;
     updateUndoButton();
 
     const lockStatusEl = document.getElementById('slide-lock-status');
@@ -149,108 +187,69 @@
     }
   }
 
-  function isValidPlaceTarget(b, c) {
-    if (board[b][c] !== null) return false;
-    if (gamePhase === 'setup') {
-      if (!CORNER_BLOCKS.includes(b)) return false;
-      if (board[b].some(stone => stone === currentPlayer)) return false;
-      return true;
-    } else if (gamePhase === 'place') {
-      if (isSuicideMove(b, c, currentPlayer)) return false;
-      if (isKoRepeatMove(b, c, currentPlayer)) return false;
-      return true;
-    }
-    return false;
-  }
+function restoreFixedBlueReservations() {
+    for (const event of BLUE_DROP_EVENTS) {
+      if (event.initial || blueDropState[event.id]) continue;
 
-  function handleCellClick(b, c) {
-    if (gamePhase === 'setup') {
-      if (!isValidPlaceTarget(b, c)) return;
-      saveUndoState();
-      board[b][c] = currentPlayer;
-      setupCount++;
-      if (setupCount === 4) {
-        gamePhase = 'place';
-        processRedReservations();
-        checkBlueStoneDrop();
-      }
-      currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-      renderBoard();
-    } else if (gamePhase === 'place') {
-      if (!isValidPlaceTarget(b, c)) return;
-      saveUndoState();
+      const block = board[event.block];
+      const fixedCell = event.cell;
+      const movedCell = block.findIndex(cell => cell === 'blue-reserved');
 
-      const cellCoord = CELL_NAMES[c];
-      if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
-        // 赤石（絶対障壁）のシークレット申告 (2ターン後出現: +2ターン)
-        wallCount[currentPlayer]--;
-        isWallDeclarationActive = false;
-        const btn = document.getElementById('btn-wall-declare');
-        if (btn) { btn.style.outline = "none"; btn.innerText = "赤石 (絶対障壁) をセット申告"; }
+      if (movedCell === fixedCell) continue;
 
-        redReservations.push({ b, c, dueTurn: turnNumber + 2, player: currentPlayer });
-        currentTurnMove.place = `+B${b+1}-${cellCoord}(SECRET_RED)`;
-        appendTurnEvent(`[EVENT:RED_DECLARE B${b+1}-${cellCoord} due=${turnNumber + 2}]`);
-        logMessage(`【シークレット申告】${currentPlayer === 'white' ? '白' : '黒'}が赤石障壁の出現場所を暗黙予約しました。`);
+      if (movedCell >= 0) {
+        // スライドで動いた予約マーカーと固定座標の内容を交換する。
+        const displaced = block[fixedCell];
+        block[fixedCell] = 'blue-reserved';
+        block[movedCell] = displaced;
       } else {
-        board[b][c] = currentPlayer;
-        currentTurnMove.place = `+B${b+1}-${cellCoord}`;
+        // 万一マーカーが失われても、固定座標へ復元する。
+        block[fixedCell] = 'blue-reserved';
       }
-
-      diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_PLACE B${b+1}-${cellCoord}`;
-      let grid = get9x9Grid(board);
-      let capturedCount = processCaptures(grid, currentPlayer);
-      set9x9GridToBoard(grid, board);
-
-      emptyCount = countEmptyCells();
-
-      if (gamePhase === 'gameover') {
-        commitTurnMove();
-        renderBoard();
-        return;
-      }
-
-      if (capturedCount > 0) {
-        logMessage(`【即時ターン確定】配置により捕獲が発生したためスライドをスキップします。`);
-        currentTurnMove.slide = null;
-        processEndOfTurnGas();
-        if (commitTurnMove()) return;
-        currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-        gamePhase = 'place';
-        processRedReservations();
-        checkBlueStoneDrop();
-      } else {
-        gamePhase = 'slide';
-      }
-      renderBoard();
     }
   }
 
-  function executeSlide(b, direction) {
+function executeSlide(b, direction) {
     if (gamePhase !== 'slide' || slideLockedBlocks.includes(b)) return;
     const block = board[b];
+    const shieldBlock = gasProtectedBoard[b];
 
     if (direction === 'right') {
       let t0 = block[2]; block[2] = block[1]; block[1] = block[0]; block[0] = t0;
       let t1 = block[5]; block[5] = block[4]; block[4] = block[3]; block[3] = t1;
       let t2 = block[8]; block[8] = block[7]; block[7] = block[6]; block[6] = t2;
+      let s0 = shieldBlock[2]; shieldBlock[2] = shieldBlock[1]; shieldBlock[1] = shieldBlock[0]; shieldBlock[0] = s0;
+      let s1 = shieldBlock[5]; shieldBlock[5] = shieldBlock[4]; shieldBlock[4] = shieldBlock[3]; shieldBlock[3] = s1;
+      let s2 = shieldBlock[8]; shieldBlock[8] = shieldBlock[7]; shieldBlock[7] = shieldBlock[6]; shieldBlock[6] = s2;
       currentTurnMove.slide = `>B${b+1}-R`;
     } else if (direction === 'left') {
       let t0 = block[0]; block[0] = block[1]; block[1] = block[2]; block[2] = t0;
       let t1 = block[3]; block[3] = block[4]; block[4] = block[5]; block[5] = t1;
       let t2 = block[6]; block[6] = block[7]; block[7] = block[8]; block[8] = t2;
+      let s0 = shieldBlock[0]; shieldBlock[0] = shieldBlock[1]; shieldBlock[1] = shieldBlock[2]; shieldBlock[2] = s0;
+      let s1 = shieldBlock[3]; shieldBlock[3] = shieldBlock[4]; shieldBlock[4] = shieldBlock[5]; shieldBlock[5] = s1;
+      let s2 = shieldBlock[6]; shieldBlock[6] = shieldBlock[7]; shieldBlock[7] = shieldBlock[8]; shieldBlock[8] = s2;
       currentTurnMove.slide = `>B${b+1}-L`;
     } else if (direction === 'down') {
       let t0 = block[6]; block[6] = block[3]; block[3] = block[0]; block[0] = t0;
       let t1 = block[7]; block[7] = block[4]; block[4] = block[1]; block[1] = t1;
       let t2 = block[8]; block[8] = block[5]; block[5] = block[2]; block[2] = t2;
+      let s0 = shieldBlock[6]; shieldBlock[6] = shieldBlock[3]; shieldBlock[3] = shieldBlock[0]; shieldBlock[0] = s0;
+      let s1 = shieldBlock[7]; shieldBlock[7] = shieldBlock[4]; shieldBlock[4] = shieldBlock[1]; shieldBlock[1] = s1;
+      let s2 = shieldBlock[8]; shieldBlock[8] = shieldBlock[5]; shieldBlock[5] = shieldBlock[2]; shieldBlock[2] = s2;
       currentTurnMove.slide = `>B${b+1}-D`;
     } else if (direction === 'up') {
       let t0 = block[0]; block[0] = block[3]; block[3] = block[6]; block[6] = t0;
       let t1 = block[1]; block[1] = block[4]; block[4] = block[7]; block[7] = t1;
       let t2 = block[2]; block[2] = block[5]; block[5] = block[8]; block[8] = t2;
+      let s0 = shieldBlock[0]; shieldBlock[0] = shieldBlock[3]; shieldBlock[3] = shieldBlock[6]; shieldBlock[6] = s0;
+      let s1 = shieldBlock[1]; shieldBlock[1] = shieldBlock[4]; shieldBlock[4] = shieldBlock[7]; shieldBlock[7] = s1;
+      let s2 = shieldBlock[2]; shieldBlock[2] = shieldBlock[5]; shieldBlock[5] = shieldBlock[8]; shieldBlock[8] = s2;
       currentTurnMove.slide = `>B${b+1}-U`;
     }
+
+    // 未降臨の青石予約マスは盤面座標に固定し、スライドでは移動させない。
+    restoreFixedBlueReservations();
 
     diagnosticContext = `${testBot.intervalId ? 'BOT' : 'MANUAL'}_SLIDE B${b+1}-${direction.toUpperCase()}`;
     let grid = get9x9Grid(board);
@@ -273,17 +272,4 @@
     checkBlueStoneDrop();
     renderBoard();
     return true;
-  }
-
-  function skipSlide() {
-    if (gamePhase !== 'slide') return;
-    currentTurnMove.slide = null;
-    processEndOfTurnGas();
-    if (commitTurnMove()) return;
-    slideLockedBlocks = [];
-    currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
-    gamePhase = 'place';
-    processRedReservations();
-    checkBlueStoneDrop();
-    renderBoard();
   }

@@ -1,4 +1,4 @@
-  let board = Array.from({length: 9}, () => Array(9).fill(null));
+let board = Array.from({length: 9}, () => Array(9).fill(null));
   let emptyCount = 81;
   let wallCount = { white: 5, black: 5 };
   let playerScores = { white: 0, black: 0 };
@@ -13,8 +13,18 @@
   // 赤石（絶対障壁）予約リスト: [{ b, c, dueTurn, player }]
   let redReservations = [];
 
-  const SEASON_DROP_TURN = 5;
-  let blueStoneDropped = false;
+  const BLUE_SHIELD_PER_STONE = 5;
+  const BLUE_DROP_EVENTS = [
+    { id: 'B1', block: 0, cell: 8, turn: 0, initial: true },
+    { id: 'B9', block: 8, cell: 0, turn: 12, initial: false },
+    { id: 'B5', block: 4, cell: 4, turn: 50, initial: false }
+  ];
+  let blueDropState = { B1: true, B9: false, B5: false };
+  let blueProtectionRemaining = { white: 0, black: 0 };
+  let blueStonesSecured = { white: 0, black: 0 };
+  // 青石で一度守られた石は、以後のガスフェーズでも免疫を維持する。
+  // 盤面と同じ9ブロック×9セルで、保護済みの石にはスライド追従させる。
+  let gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
   let gasPhaseActive = false;
 
   let ntpnMoveHistory = [];
@@ -51,7 +61,10 @@
     isWallDeclarationActive = false;
     redReservations = [];
 
-    blueStoneDropped = false;
+    blueDropState = { B1: true, B9: false, B5: false };
+    blueProtectionRemaining = { white: 0, black: 0 };
+    blueStonesSecured = { white: 0, black: 0 };
+    gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
     gasPhaseActive = false;
     gameEndInfo = {
       winner: 'IN_PROGRESS',
@@ -59,7 +72,10 @@
       turns: null,
       detail: ''
     };
-    board[2][4] = 'blue-reserved'; // B3-b2
+    // 青石はB1-c3から開始し、B9-a1・B5-b2へ順次降臨。
+    board[0][8] = 'blue';          // B1-c3: 初期青石
+    board[8][0] = 'blue-reserved'; // B9-a1: 12ターン目
+    board[4][4] = 'blue-reserved'; // B5-b2: 50ターン目
 
     ntpnMoveHistory = [];
     boardSnapshots = [];
@@ -72,7 +88,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.7.2 準備完了。白先手・黒後手固定。コウ判定・ガス中立化ルール有効。');
+    logMessage('システム起動 v2.8-test。青石は0点、確保1個につきガス被害を最大5石防御。B1-c3初期・B9-a1=12T・B5-b2=50T。');
     renderBoard();
   }
 
