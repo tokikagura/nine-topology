@@ -75,6 +75,34 @@
 (() => {
   'use strict';
 
+  const status = document.getElementById('slide-lock-status');
+  if (!status) return;
+
+  function normalizeGasStatus() {
+    const current = (status.textContent || '').trim();
+
+    // 現在の空きマス数は上段に表示済みなので、
+    // ガス発動後は重複する数値を出さない。
+    if (/^ガスフェーズ(?:中)?(?:\s*[（(].*[）)])?$/.test(current) &&
+        current !== 'ガスフェーズ中') {
+      status.textContent = 'ガスフェーズ中';
+    }
+  }
+
+  new MutationObserver(normalizeGasStatus).observe(status, {
+    childList: true,
+    subtree: true,
+    characterData: true
+  });
+
+  normalizeGasStatus();
+})();
+</script>
+
+<script>
+(() => {
+  'use strict';
+
   const banner = document.getElementById('winner-banner');
   let lastLogText = '';
 
