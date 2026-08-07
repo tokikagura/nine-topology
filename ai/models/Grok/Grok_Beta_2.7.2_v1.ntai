@@ -1,0 +1,505 @@
+/**
+ * Grok_Beta_v8
+ * Nine Topology v2.7 / v2.7.2
+ * Author: xAI / Grok
+ * Beta series - v6ベース・赤石条件厳格化（早期連射抑制）
+ */
+
+const NT_DIRS = ["up", "down", "left", "right"];
+
+function cloneBoard(board) {
+  return board.map(b => b.slice());
+}
+
+function boardToGrid(board) {
+  const g = Array.from({ length: 9 }, () => Array(9).fill(null));
+  for (let b = 0; b < 9; b++) {
+    for (let c = 0; c < 9; c++) {
+      const r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+      const col = (b % 3) * 3 + (c % 3);
+      g[r][col] = board[b][c];
+    }
+  }
+  return g;
+}
+
+function gridToBoard(grid) {
+  const b = Array.from({ length: 9 }, () => Array(9).fill(null));
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const bi = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+      const ci = (r % 3) * 3 + (c % 3);
+      b[bi][ci] = grid[r][c];
+    }
+  }
+  return b;
+}
+
+function isTerrain(type) {
+  return !type || type === "red" || type === "neutral" || type === "blue-reserved";
+}
+
+function getGroupInfo(grid, sr, sc) {
+  const stone = grid[sr][sc];
+  if (isTerrain(stone) || (stone !== "white" && stone !== "black" && stone !== "blue")) {
+    return { stone, stones: [], liberties: 99, libertySet: new Set() };
+  }
+  const vis = Array.from({ length: 9 }, () => Array(9).fill(false));
+  const q = [[sr, sc]];
+  const stones = [];
+  const lib = new Set();
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  vis[sr][sc] = true;
+  while (q.length) {
+    const [r, c] = q.shift();
+    stones.push({ row: r, col: c });
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+      const n = grid[nr][nc];
+      if (n === null) lib.add(nr + "," + nc);
+      else if (n === stone && !vis[nr][nc]) {
+        vis[nr][nc] = true;
+        q.push([nr, nc]);
+      }
+    }
+  }
+  return { stone, stones, liberties: lib.size, libertySet: lib };
+}
+
+function resolveCaptures(board) {
+  const grid = boardToGrid(board);
+  const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+  const captured = { white: 0, black: 0, blue: 0 };
+  const groups = [];
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const s = grid[r][c];
+      if (s !== "white" && s !== "black" && s !== "blue") continue;
+      if (checked[r][c]) continue;
+      const g = getGroupInfo(grid, r, c);
+      for (const p of g.stones) checked[p.row][p.col] = true;
+      if (g.liberties === 0) {
+        captured[s] += g.stones.length;
+        groups.push(g);
+      }
+    }
+  }
+  for (const g of groups) {
+    for (const p of g.stones) grid[p.row][p.col] = null;
+  }
+  return { board: gridToBoard(grid), captured, groups };
+}
+
+function applyGas(board) {
+  const grid = boardToGrid(board);
+  const toNeutral = new Set();
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (grid[r][c] !== null) continue;
+      for (const [dr, dc] of dirs) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+        const n = grid[nr][nc];
+        if (n === "white" || n === "black") toNeutral.add(nr + "," + nc);
+      }
+    }
+  }
+  for (const key of toNeutral) {
+    const [r, c] = key.split(",").map(Number);
+    grid[r][c] = "neutral";
+  }
+  return gridToBoard(grid);
+}
+
+function countEmpty(board) {
+  let n = 0;
+  for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) n++;
+  return n;
+}
+
+function slideBlock(board, bi, dir) {
+  const next = cloneBoard(board);
+  const block = next[bi];
+  if (dir === "right") {
+    [block[0], block[1], block[2]] = [block[2], block[0], block[1]];
+    [block[3], block[4], block[5]] = [block[5], block[3], block[4]];
+    [block[6], block[7], block[8]] = [block[8], block[6], block[7]];
+  } else if (dir === "left") {
+    [block[0], block[1], block[2]] = [block[1], block[2], block[0]];
+    [block[3], block[4], block[5]] = [block[4], block[5], block[3]];
+    [block[6], block[7], block[8]] = [block[7], block[8], block[6]];
+  } else if (dir === "down") {
+    [block[0], block[3], block[6]] = [block[6], block[0], block[3]];
+    [block[1], block[4], block[7]] = [block[7], block[1], block[4]];
+    [block[2], block[5], block[8]] = [block[8], block[2], block[5]];
+  } else if (dir === "up") {
+    [block[0], block[3], block[6]] = [block[3], block[6], block[0]];
+    [block[1], block[4], block[7]] = [block[4], block[7], block[1]];
+    [block[2], block[5], block[8]] = [block[5], block[8], block[2]];
+  }
+  return resolveCaptures(next);
+}
+
+function simulatePlace(board, player, b, c, gasActive) {
+  if (!board[b] || board[b][c] !== null) return { legal: false };
+  const next = cloneBoard(board);
+  next[b][c] = player;
+  let res = resolveCaptures(next);
+  let empty = countEmpty(res.board);
+  let didGas = false;
+  if (gasActive || empty <= 10) {
+    res.board = applyGas(res.board);
+    didGas = true;
+  }
+  const grid = boardToGrid(res.board);
+  const row = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+  const col = (b % 3) * 3 + (c % 3);
+  if (grid[row][col] !== player) {
+    return { legal: true, board: res.board, captured: res.captured, ownGroupSize: 0, ownLiberties: 0, didGas };
+  }
+  const self = getGroupInfo(grid, row, col);
+  const opp = player === "white" ? "black" : "white";
+  if (self.liberties === 0 && (res.captured[opp] || 0) === 0 && (res.captured.blue || 0) === 0) {
+    return { legal: false };
+  }
+  return {
+    legal: true,
+    board: res.board,
+    captured: res.captured,
+    ownGroupSize: self.stones.length,
+    ownLiberties: self.liberties,
+    didGas
+  };
+}
+
+function simulateSlide(board, bi, dir, gasActive) {
+  const res = slideBlock(board, bi, dir);
+  let empty = countEmpty(res.board);
+  let didGas = false;
+  if (gasActive || empty <= 10) {
+    res.board = applyGas(res.board);
+    didGas = true;
+  }
+  return { legal: true, board: res.board, captured: res.captured, didGas };
+}
+
+function analyze(board, player) {
+  const grid = boardToGrid(board);
+  const opp = player === "white" ? "black" : "white";
+  const ownG = [], oppG = [];
+  const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+  let blueCount = 0;
+  let bluePos = null;
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (grid[r][c] === "blue") { blueCount++; bluePos = [r, c]; }
+      if (checked[r][c]) continue;
+      const s = grid[r][c];
+      if (s !== "white" && s !== "black" && s !== "blue") continue;
+      const g = getGroupInfo(grid, r, c);
+      for (const p of g.stones) checked[p.row][p.col] = true;
+      if (s === player) ownG.push(g);
+      else if (s === opp) oppG.push(g);
+    }
+  }
+
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const ownNear = new Set(), oppNear = new Set();
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (grid[r][c] !== null) continue;
+      for (const [dr, dc] of dirs) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+        if (grid[nr][nc] === player) ownNear.add(nr + "," + nc);
+        if (grid[nr][nc] === opp) oppNear.add(nr + "," + nc);
+      }
+    }
+  }
+
+  let ownLib1 = 0, ownLib2 = 0, ownTotal = 0, ownDanger = 0, ownMaxGroup = 0;
+  let oppLib1 = 0, oppLib2 = 0, oppTotal = 0, oppDanger = 0, oppMaxGroup = 0;
+  for (const g of ownG) {
+    ownTotal += g.stones.length;
+    ownMaxGroup = Math.max(ownMaxGroup, g.stones.length);
+    if (g.liberties === 1) { ownLib1 += g.stones.length; ownDanger += g.stones.length * 38 + 180; }
+    else if (g.liberties === 2) { ownLib2 += g.stones.length; ownDanger += g.stones.length * 14; }
+  }
+  for (const g of oppG) {
+    oppTotal += g.stones.length;
+    oppMaxGroup = Math.max(oppMaxGroup, g.stones.length);
+    if (g.liberties === 1) { oppLib1 += g.stones.length; oppDanger += g.stones.length * 42 + 190; }
+    else if (g.liberties === 2) { oppLib2 += g.stones.length; oppDanger += g.stones.length * 15; }
+  }
+
+  return {
+    ownG, oppG, ownLib1, ownLib2, ownTotal, oppLib1, oppLib2, oppTotal,
+    ownDanger, oppDanger, blueCount, bluePos,
+    ownNearEmpty: ownNear.size, oppNearEmpty: oppNear.size,
+    ownMaxGroup, oppMaxGroup
+  };
+}
+
+function scorePos(board, player, cap, empty, gasActive) {
+  const opp = player === "white" ? "black" : "white";
+  const a = analyze(board, player);
+  let sc = 0;
+
+  const myCap = (cap[opp] || 0) + (cap.blue || 0) * 7.0;
+  sc += myCap * 85;
+  sc -= (cap[player] || 0) * 90;
+
+  if (myCap >= 15 || (cap[opp] || 0) >= 15) sc += 6000000;
+  if ((cap[player] || 0) >= 15) sc -= 6000000;
+
+  const end = empty <= 10 ? 4.0 : empty <= 15 ? 2.8 : empty <= 22 ? 1.7 : 1.0;
+  sc -= a.ownDanger * 4.0 * end;
+  sc += a.oppDanger * 3.7 * end;
+
+  sc += a.ownTotal * 2.5;
+  sc -= a.oppTotal * 2.4;
+
+  if (a.ownMaxGroup >= 8) sc -= (a.ownMaxGroup - 7) * 45;
+  if (a.oppMaxGroup >= 8) sc += (a.oppMaxGroup - 7) * 40;
+
+  if (a.ownLib1 >= 2) sc -= a.ownLib1 * 90;
+  if (a.oppLib1 >= 1) sc += a.oppLib1 * 80;
+
+  if (gasActive || empty <= 10) {
+    sc -= a.ownNearEmpty * 32;
+    sc += a.oppNearEmpty * 24;
+  }
+
+  if (a.blueCount > 0) sc += 30;
+
+  if (empty <= 16) {
+    sc += empty * 5;
+    sc += (a.ownTotal - a.oppTotal) * 7;
+  }
+
+  return sc;
+}
+
+function getPlaces(board, player, gasActive) {
+  const m = [];
+  for (let b = 0; b < 9; b++) {
+    for (let c = 0; c < 9; c++) {
+      const s = simulatePlace(board, player, b, c, gasActive);
+      if (s.legal) m.push({ b, c, sim: s });
+    }
+  }
+  return m;
+}
+
+function getSlides(board, gasActive) {
+  const m = [];
+  for (let b = 0; b < 9; b++) {
+    for (const d of NT_DIRS) {
+      const s = simulateSlide(board, b, d, gasActive);
+      if (s.legal) m.push({ b, dir: d, sim: s });
+    }
+  }
+  return m;
+}
+
+function maxDamage(board, player, gasActive, empty, limit = 14) {
+  const opp = player === "white" ? "black" : "white";
+  let max = 0;
+  const places = getPlaces(board, opp, gasActive);
+  places.sort((a, b) => {
+    const ca = (a.sim.captured[player] || 0) + (a.sim.captured.blue || 0) * 5;
+    const cb = (b.sim.captured[player] || 0) + (b.sim.captured.blue || 0) * 5;
+    return cb - ca;
+  });
+  for (let i = 0; i < Math.min(places.length, limit); i++) {
+    const d = places[i].sim.captured[player] || 0;
+    if (d > max) max = d;
+    if (d >= 15) return d;
+  }
+  if (empty > 8) {
+    const slides = getSlides(board, gasActive);
+    slides.sort((a, b) => ((b.sim.captured[player] || 0) - (a.sim.captured[player] || 0)));
+    for (let i = 0; i < Math.min(slides.length, 10); i++) {
+      const d = slides[i].sim.captured[player] || 0;
+      if (d > max) max = d;
+      if (d >= 15) return d;
+    }
+  }
+  return max;
+}
+
+let lastSlideBlock = -1;
+
+window.NTAI_Engine = {
+  name: "Grok_Beta_v8",
+  author: "xAI / Grok",
+
+  decideNextMove(board, gs) {
+    const { player, phase, redWallsLeft, turnNumber, emptyCount, gasPhaseActive } = gs;
+    const gasActive = !!gasPhaseActive;
+
+    if (phase === "setup") return this.setup(board, player);
+    if (phase === "place") return this.place(board, player, redWallsLeft, turnNumber, emptyCount, gasActive);
+    if (phase === "slide") return this.slide(board, player, emptyCount, gasActive);
+    return { place: null, slide: { pass: true } };
+  },
+
+  setup(board, player) {
+    const corners = [0, 2, 6, 8];
+    const cands = [];
+    for (const b of corners) {
+      let hasOwn = false, hasOpp = false;
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === player) hasOwn = true;
+        if (board[b][c] && board[b][c] !== player && board[b][c] !== "red" && board[b][c] !== "neutral" && board[b][c] !== "blue-reserved") hasOpp = true;
+      }
+      if (hasOwn || hasOpp) continue;
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) {
+          const bias = (c === 4) ? 10 : ([1, 3, 5, 7].includes(c) ? 5 : 2);
+          cands.push({ b, c, s: bias + Math.random() * 2.5 });
+        }
+      }
+    }
+    if (!cands.length) return { place: { b: 0, c: 4 } };
+    cands.sort((a, b) => b.s - a.s);
+    return { place: { b: cands[0].b, c: cands[0].c } };
+  },
+
+  place(board, player, redLeft, turn, empty, gasActive) {
+    const places = getPlaces(board, player, gasActive);
+    if (!places.length) return { place: { b: 0, c: 0, secretRed: false }, slide: null };
+
+    const scored = [];
+    for (const mv of places) {
+      const { b, c, sim } = mv;
+      const opp = player === "white" ? "black" : "white";
+      const myCap = (sim.captured[opp] || 0) + (sim.captured.blue || 0) * 6.5;
+      const selfCap = sim.captured[player] || 0;
+
+      if (myCap >= 15 || (sim.captured[opp] || 0) >= 15) {
+        return { place: { b, c, secretRed: false }, slide: null };
+      }
+      if (selfCap >= 15) continue;
+
+      let sc = scorePos(sim.board, player, sim.captured, countEmpty(sim.board), gasActive || sim.didGas);
+      sc += (sim.ownLiberties || 0) * 11;
+      if ((sim.ownLiberties || 99) <= 1 && (sim.ownGroupSize || 0) >= 3) sc -= 320;
+      if (myCap >= 1) sc += myCap * 65;
+      if (empty <= 14) sc += myCap * 55;
+
+      if (empty <= 13) {
+        const afterEmpty = countEmpty(sim.board);
+        sc += afterEmpty * 6;
+      }
+
+      const a = analyze(sim.board, player);
+      if (a.bluePos) {
+        const [br, bc] = a.bluePos;
+        const row = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+        const col = (b % 3) * 3 + (c % 3);
+        if (Math.abs(row - br) + Math.abs(col - bc) === 1) sc += 45;
+      }
+
+      scored.push({ b, c, sim, score: sc, myCap });
+    }
+
+    if (!scored.length) {
+      const f = places[0];
+      return { place: { b: f.b, c: f.c, secretRed: false }, slide: null };
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    const topN = Math.min(scored.length, empty <= 10 ? 28 : 18);
+
+    let best = null, bestAdj = -Infinity;
+    for (let i = 0; i < topN; i++) {
+      const cand = scored[i];
+      const dmg = maxDamage(cand.sim.board, player, gasActive || cand.sim.didGas, countEmpty(cand.sim.board), 12);
+      let adj = cand.score - dmg * 65;
+      if (dmg >= 15) adj -= 5000000;
+      if (cand.myCap >= 2) adj += cand.myCap * 60;
+
+      // 赤石：v6よりさらに厳格に（ターン25以降 + 強い利益条件のみ）
+      let useRed = false;
+      if (redLeft > 0 && turn >= 25 && turn <= 110) {
+        const a = analyze(cand.sim.board, player);
+        if (a.oppLib1 >= 1 || a.oppMaxGroup >= 8 || (gasActive && a.ownNearEmpty >= 5) || a.oppLib2 >= 5) {
+          useRed = true;
+          adj += 90;
+        }
+      }
+
+      if (adj > bestAdj) {
+        bestAdj = adj;
+        best = { ...cand, useRed };
+      }
+    }
+
+    return {
+      place: { b: best.b, c: best.c, secretRed: !!(best.useRed && redLeft > 0) },
+      slide: null
+    };
+  },
+
+  slide(board, player, empty, gasActive) {
+    const slides = getSlides(board, gasActive);
+    if (!slides.length) return { place: null, slide: { pass: true } };
+
+    const before = analyze(board, player);
+    const scored = [];
+    for (const mv of slides) {
+      const { b, dir, sim } = mv;
+      const opp = player === "white" ? "black" : "white";
+      const myCap = (sim.captured[opp] || 0) + (sim.captured.blue || 0) * 6.5;
+      const selfCap = sim.captured[player] || 0;
+
+      if (myCap >= 15 || (sim.captured[opp] || 0) >= 15) {
+        lastSlideBlock = b;
+        return { place: null, slide: { b, dir } };
+      }
+      if (selfCap >= 15) continue;
+
+      let sc = scorePos(sim.board, player, sim.captured, countEmpty(sim.board), gasActive || sim.didGas);
+      sc += myCap * 75;
+      sc -= selfCap * 80;
+
+      const after = analyze(sim.board, player);
+      if (after.ownDanger < before.ownDanger - 8) sc += 100;
+      if (after.oppDanger > before.oppDanger + 8) sc += 110;
+      if (after.ownLib1 < before.ownLib1) sc += 120;
+      if (after.oppLib1 > before.oppLib1) sc += 130;
+      if ((gasActive || sim.didGas) && after.ownNearEmpty < before.ownNearEmpty) sc += 80;
+      if (after.oppMaxGroup > before.oppMaxGroup) sc += 55;
+      if (after.ownMaxGroup < before.ownMaxGroup) sc += 50;
+
+      if (b === lastSlideBlock) sc -= 100;
+
+      if (empty <= 12) {
+        const afterEmpty = countEmpty(sim.board);
+        sc += afterEmpty * 7;
+      }
+
+      const dmg = maxDamage(sim.board, player, gasActive || sim.didGas, countEmpty(sim.board), 9);
+      sc -= dmg * 60;
+      if (dmg >= 15) sc -= 5000000;
+
+      scored.push({ b, dir, score: sc, myCap });
+    }
+
+    if (!scored.length) return { place: null, slide: { pass: true } };
+
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+
+    if (best.score < 20 && best.myCap < 1) {
+      return { place: null, slide: { pass: true } };
+    }
+
+    lastSlideBlock = best.b;
+    return { place: null, slide: { b: best.b, dir: best.dir } };
+  }
+};
