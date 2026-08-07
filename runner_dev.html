@@ -198,6 +198,27 @@
     font-size: 0.62rem;
     line-height: 1.45;
   }
+
+  .download-link {
+    display: block;
+    width: 100%;
+    max-width: 340px;
+    box-sizing: border-box;
+    text-align: center;
+    color: #66fcf1;
+    border: 1px solid #45f3ff;
+    border-radius: 4px;
+    padding: 8px;
+    margin: 0 0 8px;
+    font-size: 0.72rem;
+    font-weight: bold;
+    text-decoration: none;
+    background: #1f2833;
+  }
+
+  .download-link:active {
+    opacity: 0.75;
+  }
 </style>
 </head>
 <body>
@@ -254,6 +275,8 @@
     A blank slot uses the built-in bot.
   </div>
 </div>
+
+<a class="download-link" href="README.md#legacy-ntai-download">DOWNLOAD</a>
 
 <script>
 (() => {

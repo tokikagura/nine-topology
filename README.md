@@ -4,6 +4,16 @@ Quick Rule Guide for Game Version v2.7.2
 
 This README summarizes the official v2.7.2 ruleset. It is not an AI API specification. Features from the separate v2.8 test ruleset are not included here.
 
+## Legacy NTAI Downloads / レガシーNTAI ダウンロード
+
+Older NTAI engines for development matches and reference testing.  
+自作NTAIの開発対局・比較テスト用に、旧世代のNTAIを公開しています。
+
+- [GPT — GPT_Alpha_v9.ntai](./ai/models/legacy/GPT_Alpha_v9.ntai)
+- [Claude — claude-topologist_v8.ntai](./ai/models/legacy/claude-topologist_v8.ntai)
+- [Gemini — Gemini_Alpha_v10.ntai](./ai/models/legacy/Gemini_Alpha_v10.ntai)
+- [Grok — Grok_Alpha_v15.ntai](./ai/models/legacy/Grok_Alpha_v15.ntai)
+
 ## English
 
 ### 1. Overview
