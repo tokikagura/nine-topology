@@ -1,0 +1,979 @@
+/**
+ * NTAI Engine - Claude-Topologist
+ * Version: 2.1.0 (GameVersion 2.7.2 正式ルール対応版)
+ * Author: Claude (Anthropic)
+ * Nine Topology (NTP) v2.6+ 対応 AIエンジン
+ *
+ * このファイルは「2.8-test」ルール(青石=ガス保護・出現位置固定)専用の要素を除いた、
+ * 正式ルール(GameVersion 2.7.2、青石=捕獲で5点)向けビルド。
+ * それ以外の改善(コンボ探索・2手先読み・ガス多段階対応・赤石不発回避など)は
+ * ゲーム機構そのものに基づく汎用的な改善のため、そのまま含まれている。
+ */
+
+/*
+ * window.NTAI_Engine.decideNextMove(board, gameState) 仕様準拠
+ *
+ * ===== 実戦棋譜(.ntpn)解析により確定した仕様 =====
+ * ・1ターン = 同一プレイヤーの「配置(またはSECRET_RED申告)」→「スライド(またはPASS)」の連続実行。
+ *   decideNextMoveはこの2ステップそれぞれで個別に呼ばれる（phase:"place"→phase:"slide"の順）。
+ * ・ガスフェーズは空きマスがちょうど10になった瞬間に一度だけ GAS_START として発火し、
+ *   その時点で空きマスに上下左右で接するwhite/black石が「同時に」全てneutral化される
+ *   （GAS_NEUTRALIZEイベント）。これにより連が分断され、直後に呼吸点0になった側が
+ *   まとめて捕獲され、15個以上の一括捕獲でそのまま即決着するケースが実戦2局とも確認された。
+ *   → ガス突入の瞬間に「自分の石がどれだけneutral化に巻き込まれるか」を正確にシミュレートし、
+ *      その結果として断片化・即死しないかを事前に評価することが最重要と判断し、実装した。
+ * ・赤石は申告ターンの2ターン後に出現（due=申告ターン+2）で仕様通り。青石は5ターン目に固定で降臨。
+ * ・スライドフェーズのPASSは「動かせない時の強制」だけでなく、動かせる状況でも任意に選べる
+ *   （実戦棋譜で、盤面に合法なスライドが存在するのに両AIとも頻繁にPASSしている場面を多数確認）。
+ *   このため generateSlideMoves は常にPASSを候補に含める実装にしている。
+ * ・ガスのneutral化について：数学的に検討した結果、「コンパクトな塊なら生き残りやすい」わけではなく、
+ *   空きマスに接する石が変換されると、その内側の石も空きマスへの直接アクセスを失い連鎖的に
+ *   呼吸点0になりやすいことが分かった。つまり形の工夫よりも「空きマスに接している石の総数を
+ *   相手より少なく保つ」ことが実戦的に効く指標と判断し、exposureBalanceScore として
+ *   ゲーム全体を通じて評価するようにしている。
+ *   初回実装時の重みは弱すぎて（中盤で6個の露出差があってもスコアへの影響が1点程度）実質
+ *   機能していなかったことが実戦棋譜（黒14個 vs 白8個のneutral化から黒が敗北）で判明したため、
+ *   重みと下限を大幅に引き上げ、中盤からでも意味のある影響力を持つよう再調整した。
+ *
+ * ===== 残る設計上の仮定 =====
+ * 1. "blue" の捕獲得点は、捕獲を発生させた側（その手を指したプレイヤー）に加算されるものとして実装しています。
+ * 2. "blue-reserved" は「空きマスではないが石でもない」地形として扱っています（呼吸点を塞ぐが、捕獲対象にはならない）。
+ * 3. ガスフェーズが同一ゲーム中に複数回発火しうるか（一度発火した後も、空きマスが増減する度に
+ *    再度neutral化が起こるか）は棋譜からは確認できなかったため、「emptyCountが閾値付近になる度に
+ *    毎回シミュレートして評価する」設計とし、実際の発火回数に依存しない安全側の実装にしています。
+ * 4. 配置フェーズでの PASS のレスポンス形式が明記されていなかったため、
+ *    スライドフェーズと同じ { place: null, slide: { pass: true } } を使用しています。
+ *
+ * 上記の仮定が実際の仕様と異なる場合、該当箇所（コメントに "ASSUMPTION" と明記）を調整してください。
+ */
+
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------
+  // 重み付けパラメータ（チューニング用に一箇所にまとめてあります）
+  // ---------------------------------------------------------
+  const WEIGHTS = {
+    materialPerPoint: 12, // 捕獲点差 1点あたりの評価値
+    stonePresence: 0.05, // 自石1個あたりの存在価値
+    ownAtari: -4, // 自分の連が呼吸点1（アタリ）
+    ownLowLiberty2: -0.8, // 自分の連が呼吸点2
+    ownLowLiberty3: -0.25, // 自分の連が呼吸点3（じわじわ包囲される展開への早期警戒）
+    oppAtari: 3, // 相手の連が呼吸点1（攻め筋）
+    huntBonusPerLibertyPerStone: 0.45, // 相手の連を呼吸点1〜5全体で積極的に狙うボーナス(Rushの0.9より控えめ)
+    exposureBalanceWeight: 1.3, // 空きマスに接する石の数(露出)の差に対する重み。ガスは露出した石をまとめて薙ぎ払うため、
+    // ゲーム全体を通じて効かせ、閾値に近づくほど強く効かせる（詳細はexposureBalanceScore参照）
+    centerBlockBonus: 0.15, // 中央ブロック(B5)支配ボーナス
+    concentrationThreshold: 10, // この個数を超える単一の連は、呼吸点が足りていても危険視し始める
+    concentrationRiskPerStone: 0.5, // 閾値(10)超過1個あたりの緩やかなペナルティ
+    concentrationCriticalSize: 13, // 15(即敗北ライン)の目前とみなすサイズ
+    concentrationCriticalPerStone: 3.0, // 13個超過1個あたりの急勾配ペナルティ（相手の集中には0.6倍で加点）
+    blueTargetWeight: 0.5, // 青石の既知の出現マスに対する事前包囲ボーナス（隣接する自石-敵石の差×近接度）
+    redSynergyPerAdjacentEnemy: 1.6, // 赤石予約が敵石に隣接している場合のボーナス
+    redOpportunityCost: -1.0, // 赤石予約による「実石を置けない」機会コスト
+    instantWinScore: 1e9, // 即勝利・即敗北の評価値
+    gasProjectionRange: 24, // 空きマスがこの値以下になったら「今ガスが来たら」を精密シミュレートし始める（近いほど重み増）
+    gasProjectionWeight: 9, // ガス起因の予測捕獲点差 1点あたりの評価値（実測上ここが勝敗を分けるため高め）
+    gasCatastropheGuard: 0.5, // 自分/相手が15個以上neutral化後即死する場合のinstantWinScoreに対する掛け目
+  };
+
+  const DIRS = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ];
+
+  // ---------------------------------------------------------
+  // 座標変換: block/cell(b,c) <-> global 9x9 row/col
+  // ---------------------------------------------------------
+  function bcToGlobal(b, c) {
+    const blockRow = Math.floor(b / 3);
+    const blockCol = b % 3;
+    const cellRow = Math.floor(c / 3);
+    const cellCol = c % 3;
+    return { row: blockRow * 3 + cellRow, col: blockCol * 3 + cellCol };
+  }
+
+  function globalToBC(row, col) {
+    const b = Math.floor(row / 3) * 3 + Math.floor(col / 3);
+    const c = (row % 3) * 3 + (col % 3);
+    return { b, c };
+  }
+
+  function boardToGrid(board) {
+    const grid = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        const { row, col } = bcToGlobal(b, c);
+        grid[row][col] = board[b][c];
+      }
+    }
+    return grid;
+  }
+
+  function gridToBoard(grid) {
+    const board = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const { b, c } = globalToBC(row, col);
+        board[b][c] = grid[row][col];
+      }
+    }
+    return board;
+  }
+
+  function deepCloneBoard(board) {
+    return board.map((block) => block.slice());
+  }
+
+  // ---------------------------------------------------------
+  // ブロック内循環スライド
+  // ---------------------------------------------------------
+  function rotateBlockCells(cells, dir) {
+    const res = new Array(9);
+    const rows = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+    ];
+    if (dir === "right") {
+      for (const [i0, i1, i2] of rows) {
+        res[i0] = cells[i2];
+        res[i1] = cells[i0];
+        res[i2] = cells[i1];
+      }
+    } else if (dir === "left") {
+      for (const [i0, i1, i2] of rows) {
+        res[i0] = cells[i1];
+        res[i1] = cells[i2];
+        res[i2] = cells[i0];
+      }
+    } else if (dir === "down") {
+      for (let i = 0; i < 3; i++) {
+        res[0 * 3 + i] = cells[2 * 3 + i];
+        res[1 * 3 + i] = cells[0 * 3 + i];
+        res[2 * 3 + i] = cells[1 * 3 + i];
+      }
+    } else if (dir === "up") {
+      for (let i = 0; i < 3; i++) {
+        res[0 * 3 + i] = cells[1 * 3 + i];
+        res[1 * 3 + i] = cells[2 * 3 + i];
+        res[2 * 3 + i] = cells[0 * 3 + i];
+      }
+    } else {
+      throw new Error("unknown slide direction: " + dir);
+    }
+    return res;
+  }
+
+  // ---------------------------------------------------------
+  // 連(グループ)と呼吸点の計算（盤面全体・グローバル座標基準）
+  // ---------------------------------------------------------
+  function findGroups(grid, predicate) {
+    const visited = new Set();
+    const groups = [];
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const key = r + "," + c;
+        if (visited.has(key)) continue;
+        if (!predicate(grid[r][c])) continue;
+        const stack = [[r, c]];
+        visited.add(key);
+        const cells = new Set([key]);
+        const liberties = new Set();
+        while (stack.length) {
+          const [cr, cc] = stack.pop();
+          for (const [dr, dc] of DIRS) {
+            const nr = cr + dr;
+            const nc = cc + dc;
+            if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+            const val = grid[nr][nc];
+            const nkey = nr + "," + nc;
+            if (val === null) {
+              liberties.add(nkey);
+              continue;
+            }
+            if (predicate(val) && !visited.has(nkey)) {
+              visited.add(nkey);
+              cells.add(nkey);
+              stack.push([nr, nc]);
+            }
+          }
+        }
+        groups.push({ cells, liberties });
+      }
+    }
+    return groups;
+  }
+
+  function hasEmptyNeighbor(grid, r, c) {
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+      if (grid[nr][nc] === null) return true;
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------
+  // 捕獲解決（white/black/blue いずれも呼吸点0で同時除去）
+  // ---------------------------------------------------------
+  function resolveCaptures(grid) {
+    const toRemove = []; // { r, c, color }
+    for (const color of ["white", "black", "blue"]) {
+      const groups = findGroups(grid, (v) => v === color);
+      for (const g of groups) {
+        if (g.liberties.size === 0) {
+          for (const key of g.cells) {
+            const [r, c] = key.split(",").map(Number);
+            toRemove.push({ r, c, color });
+          }
+        }
+      }
+    }
+    const newGrid = grid.map((row) => row.slice());
+    let capturedWhite = 0,
+      capturedBlack = 0,
+      capturedBlue = 0;
+    for (const { r, c, color } of toRemove) {
+      newGrid[r][c] = null;
+      if (color === "white") capturedWhite++;
+      else if (color === "black") capturedBlack++;
+      else capturedBlue++;
+    }
+    return { grid: newGrid, capturedWhite, capturedBlack, capturedBlue };
+  }
+
+  // ---------------------------------------------------------
+  // ガスフェーズのneutral化を精密シミュレート
+  // 「空きマスに上下左右で接するwhite/black石が同時にneutralへ変換される」を再現し、
+  // その結果、分断されて呼吸点0になった連があれば同時捕獲まで解決する。
+  // ---------------------------------------------------------
+  function applyGasNeutralize(grid) {
+    const toConvert = [];
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const v = grid[r][c];
+        if ((v === "white" || v === "black") && hasEmptyNeighbor(grid, r, c)) {
+          toConvert.push([r, c]);
+        }
+      }
+    }
+    const newGrid = grid.map((row) => row.slice());
+    for (const [r, c] of toConvert) newGrid[r][c] = "neutral";
+    return newGrid;
+  }
+
+  // 実戦棋譜で、ガスのneutral化は1回きりではなく、露出がなくなるまで
+  // 複数ターンにわたって波状に発生することが確認できた(1局で7回連鎖した例もある)。
+  // そのため「最終的に安定するまで」繰り返しシミュレートし、合計の被害を返す。
+  function simulateGasAndCaptures(board) {
+    let grid = boardToGrid(board);
+    let totalCapturedWhite = 0,
+      totalCapturedBlack = 0,
+      totalCapturedBlue = 0;
+    for (let wave = 0; wave < 20; wave++) {
+      // 安全のため上限20波
+      const gasGrid = applyGasNeutralize(grid);
+      const resolved = resolveCaptures(gasGrid);
+      totalCapturedWhite += resolved.capturedWhite;
+      totalCapturedBlack += resolved.capturedBlack;
+      totalCapturedBlue += resolved.capturedBlue;
+      let changed = false;
+      for (let r = 0; r < 9 && !changed; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (grid[r][c] !== resolved.grid[r][c]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      grid = resolved.grid;
+      if (!changed) break; // 収束したら終了
+    }
+    return {
+      board: gridToBoard(grid),
+      capturedWhite: totalCapturedWhite,
+      capturedBlack: totalCapturedBlack,
+      capturedBlue: totalCapturedBlue,
+    };
+  }
+
+  // 「もし今この盤面でガスが発火したら」を評価し、勝敗を分けるレベルの得点差・
+  // 即死リスクをスコアに織り込む。emptyCountが閾値に近いほど現実的な予測になるため、
+  // 近接度(proximity)でテーパーをかける：遠いうちは軽い参考程度、閾値直前ほど本気で効かせる。
+  function gasProjectionScore(board, gameState, us) {
+    if (gameState.emptyCount === undefined || gameState.emptyCount > WEIGHTS.gasProjectionRange) return 0;
+
+    const range = WEIGHTS.gasProjectionRange;
+    const proximity = Math.max(0.25, Math.min(1, 1 - (gameState.emptyCount - 10) / (range - 10)));
+
+    const proj = simulateGasAndCaptures(board);
+    let moverGain, oppGain, moverLostCount, oppLostCount;
+    if (us === "white") {
+      moverGain = proj.capturedBlack * 1 + proj.capturedBlue * 5;
+      oppGain = proj.capturedWhite * 1;
+      moverLostCount = proj.capturedWhite;
+      oppLostCount = proj.capturedBlack + proj.capturedBlue;
+    } else {
+      moverGain = proj.capturedWhite * 1 + proj.capturedBlue * 5;
+      oppGain = proj.capturedBlack * 1;
+      moverLostCount = proj.capturedBlack;
+      oppLostCount = proj.capturedWhite + proj.capturedBlue;
+    }
+
+    let score = (moverGain - oppGain) * WEIGHTS.gasProjectionWeight * proximity;
+    // CAPTURE_15_SCORE対応：15個以上の損失そのものではなく、それでも得点で勝ち越せるかで判定する
+    if (moverLostCount >= 15 || oppLostCount >= 15) {
+      const { my, op } = currentScores(gameState, us);
+      const finalMy = my + moverGain;
+      const finalOp = op + oppGain;
+      if (finalMy < finalOp) score -= WEIGHTS.instantWinScore * WEIGHTS.gasCatastropheGuard * proximity;
+      else if (finalMy > finalOp) score += WEIGHTS.instantWinScore * WEIGHTS.gasCatastropheGuard * proximity;
+    }
+    return score;
+  }
+
+  // ---------------------------------------------------------
+  // 手のシミュレーション（配置 / スライド / パス）
+  // ---------------------------------------------------------
+  function simulateMove(board, move, mover) {
+    const opponent = mover === "white" ? "black" : "white";
+
+    if (move.slide && move.slide.pass) {
+      return {
+        board: deepCloneBoard(board),
+        capturedWhite: 0,
+        capturedBlack: 0,
+        capturedBlue: 0,
+        moverGainPts: 0,
+        opponentGainPts: 0,
+        moverCapturedCount: 0,
+        opponentCapturedCount: 0,
+        instantWinMover: false,
+        instantWinOpponent: false,
+      };
+    }
+
+    let newBoard = deepCloneBoard(board);
+
+    if (move.place && move.place.secretRed) {
+      // 赤石申告：盤面は変化しない（2ターン後に出現）
+      return {
+        board: newBoard,
+        capturedWhite: 0,
+        capturedBlack: 0,
+        capturedBlue: 0,
+        moverGainPts: 0,
+        opponentGainPts: 0,
+        moverCapturedCount: 0,
+        opponentCapturedCount: 0,
+        instantWinMover: false,
+        instantWinOpponent: false,
+      };
+    }
+
+    if (move.place) {
+      newBoard[move.place.b][move.place.c] = mover;
+    } else if (move.slide) {
+      newBoard[move.slide.b] = rotateBlockCells(board[move.slide.b], move.slide.dir);
+    }
+
+    const grid = boardToGrid(newBoard);
+    const resolved = resolveCaptures(grid);
+    const finalBoard = gridToBoard(resolved.grid);
+
+    let moverGainPts, opponentGainPts, moverCapturedCount, opponentCapturedCount;
+    if (mover === "white") {
+      moverGainPts = resolved.capturedBlack * 1 + resolved.capturedBlue * 5;
+      opponentGainPts = resolved.capturedWhite * 1;
+      moverCapturedCount = resolved.capturedBlack + resolved.capturedBlue;
+      opponentCapturedCount = resolved.capturedWhite;
+    } else {
+      moverGainPts = resolved.capturedWhite * 1 + resolved.capturedBlue * 5;
+      opponentGainPts = resolved.capturedBlack * 1;
+      moverCapturedCount = resolved.capturedWhite + resolved.capturedBlue;
+      opponentCapturedCount = resolved.capturedBlack;
+    }
+
+    return {
+      board: finalBoard,
+      capturedWhite: resolved.capturedWhite,
+      capturedBlack: resolved.capturedBlack,
+      capturedBlue: resolved.capturedBlue,
+      moverGainPts,
+      opponentGainPts,
+      moverCapturedCount,
+      opponentCapturedCount,
+      instantWinMover: moverCapturedCount >= 15,
+      instantWinOpponent: opponentCapturedCount >= 15,
+    };
+  }
+
+  // ---------------------------------------------------------
+  // 合法手生成
+  // ---------------------------------------------------------
+  function generatePlaceMoves(board, gameState) {
+    const moves = [];
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) {
+          moves.push({ place: { b, c, secretRed: false }, slide: null });
+          if (gameState.redWallsLeft > 0) {
+            moves.push({ place: { b, c, secretRed: true }, slide: null });
+          }
+        }
+      }
+    }
+    if (moves.length === 0) {
+      moves.push({ place: null, slide: { pass: true } }); // ASSUMPTION: 配置フェーズのPASS形式
+    }
+    return moves;
+  }
+
+  function generateSlideMoves(board, gameState) {
+    const dirs = ["up", "down", "left", "right"];
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const moves = [];
+    // 実戦棋譜より、スライド可能な状況でも任意でPASSが選べることを確認済みのため、
+    // 強制時のフォールバックではなく常に候補として含める。
+    moves.push({ place: null, slide: { pass: true } });
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        moves.push({ place: null, slide: { b, dir } });
+      }
+    }
+    return moves;
+  }
+
+  // ---------------------------------------------------------
+  // 露出バランス評価：空きマスに接している自分/相手の石の数の差を、
+  // ゲーム全体を通じて緩やかに、ガスの閾値(空きマス10)に近づくほど強く評価する。
+  //
+  // 【背景】ガスのneutral化は「空きマスに接する石」を一斉に変換し、その結果、
+  // 内側に残った石も空きマスへの直接アクセスを失って連鎖的に呼吸点0になりやすい。
+  // つまり形の工夫（コンパクトにまとめる等）だけでは根本的な解決にならず、
+  // 「露出している石の総数を相手より少なく保つ」ことが実戦的に最も効く指標だと判断した。
+  // ---------------------------------------------------------
+  function exposureBalanceScore(grid, gameState, us) {
+    if (gameState.emptyCount === undefined) return 0;
+    const opp = us === "white" ? "black" : "white";
+    let ownExposed = 0,
+      oppExposed = 0;
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const v = grid[r][c];
+        if (v === us && hasEmptyNeighbor(grid, r, c)) ownExposed++;
+        else if (v === opp && hasEmptyNeighbor(grid, r, c)) oppExposed++;
+      }
+    }
+    // 空きマス70あたりから緩やかに効き始め、10(ガス発動)に近づくほど1.0に向けて強まる。
+    // 実戦で「中盤でじわじわ開いた露出差を終盤の数手だけでは挽回できない」ケースが確認できたため、
+    // 下限(序盤の重み)を引き上げ、より早い段階から実効性を持たせている。
+    const proximity = Math.max(0.25, Math.min(1, 1 - (gameState.emptyCount - 10) / 60));
+    return (oppExposed - ownExposed) * WEIGHTS.exposureBalanceWeight * proximity;
+  }
+
+  // ---------------------------------------------------------
+  // 【2.7.2 正式ルール版】青石の出現位置・タイミングが事前に固定されているのは
+  // 「2.8-test」ルール限定の仕様であり、2.7.2の正式ルールでは青石は通常通り
+  // 捕獲すると5点になる石で、出現位置も事前には分からない。そのため
+  // BLUE_TARGETSは意図的に空配列にしている（関数自体は温存し、ルールが
+  // 固定位置に変わった場合はテスト版のBLUE_TARGETSを復元すれば再利用できる）。
+  // ---------------------------------------------------------
+  const BLUE_TARGETS = [];
+
+  function blueTargetBonus(grid, gameState, us) {
+    if (!gameState.turnNumber) return 0;
+    const opp = us === "white" ? "black" : "white";
+    let bonus = 0;
+    for (const target of BLUE_TARGETS) {
+      const { row, col } = bcToGlobal(target.b, target.c);
+      const cellValue = grid[row][col];
+      const turnsUntil = target.turn - gameState.turnNumber;
+      if (turnsUntil < -5 || turnsUntil > 25) continue; // 時期外れは無視
+      const proximity = Math.max(0.1, Math.min(1, 1 - Math.abs(turnsUntil) / 25));
+      if (cellValue !== null) {
+        // 自分の石でこのマスを(出現前なのに)埋めてしまった場合のみ、機会損失として軽く咎める
+        if (turnsUntil > 0 && cellValue === us) bonus -= WEIGHTS.blueTargetWeight * 2 * proximity;
+        continue;
+      }
+      let ownAdj = 0,
+        oppAdj = 0;
+      for (const [dr, dc] of DIRS) {
+        const nr = row + dr;
+        const nc = col + dc;
+        if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+        if (grid[nr][nc] === us) ownAdj++;
+        else if (grid[nr][nc] === opp) oppAdj++;
+      }
+      bonus += (ownAdj - oppAdj) * WEIGHTS.blueTargetWeight * proximity;
+    }
+    return bonus;
+  }
+
+  // ---------------------------------------------------------
+  // 局面評価（自分視点の差分スコア）
+  // ---------------------------------------------------------
+  function evaluatePosition(grid, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    let score = 0;
+
+    const usGroups = findGroups(grid, (v) => v === us);
+    const oppGroups = findGroups(grid, (v) => v === opp);
+
+    for (const g of usGroups) {
+      score += g.cells.size * WEIGHTS.stonePresence;
+      // 塊が大きいほど「一気に持っていかれた時の被害」が甚大（15個一括捕獲即敗北のリスク）なので、
+      // 呼吸点が少ない大きな塊は強く危険視する
+      const dangerMult = 1 + Math.min(g.cells.size, 20) * 0.15;
+      if (g.liberties.size === 1) score += WEIGHTS.ownAtari * dangerMult;
+      else if (g.liberties.size === 2) score += WEIGHTS.ownLowLiberty2 * dangerMult;
+      else if (g.liberties.size === 3) score += WEIGHTS.ownLowLiberty3 * dangerMult;
+      // 一点集中リスク：呼吸点が十分にあって一見健全でも、単一の連が15個(即敗北の閾値)に
+      // 近づくほど「一度に崩れた時の被害」は変わらず甚大。実戦で、呼吸点は足りていた
+      // 一つの巨大な連がまるごと(31個)捕獲され0-31で敗北したケースが確認できたため、
+      // 呼吸点の状態に関わらずサイズそのものにも緩やかなペナルティを課す。
+      if (g.cells.size > WEIGHTS.concentrationThreshold) {
+        score += (WEIGHTS.concentrationThreshold - g.cells.size) * WEIGHTS.concentrationRiskPerStone;
+      }
+      if (g.cells.size > WEIGHTS.concentrationCriticalSize) {
+        score += (WEIGHTS.concentrationCriticalSize - g.cells.size) * WEIGHTS.concentrationCriticalPerStone;
+      }
+    }
+    for (const g of oppGroups) {
+      score -= g.cells.size * WEIGHTS.stonePresence;
+      const opportunityMult = 1 + Math.min(g.cells.size, 20) * 0.15;
+      if (g.liberties.size === 1) score += WEIGHTS.oppAtari * opportunityMult;
+      // Claude-Rushとの対戦で「攻めの姿勢が薄い」ことが明確に敗因として出たため、
+      // アタリ限定ではなく呼吸点1〜5全体を大きさ込みで積極的に狙うボーナスを追加。
+      // 守りの性格は変えたくないので、Rush(0.9)より控えめな重みにしている。
+      const libertyPressure = Math.max(0, 6 - g.liberties.size);
+      score += libertyPressure * g.cells.size * WEIGHTS.huntBonusPerLibertyPerStone;
+      // 相手が一点集中している場合は、逆にこちらにとってのチャンス（将来の一括捕獲を狙いやすい）
+      if (g.cells.size > WEIGHTS.concentrationThreshold) {
+        score += (g.cells.size - WEIGHTS.concentrationThreshold) * WEIGHTS.concentrationRiskPerStone * 0.6;
+      }
+      if (g.cells.size > WEIGHTS.concentrationCriticalSize) {
+        score += (g.cells.size - WEIGHTS.concentrationCriticalSize) * WEIGHTS.concentrationCriticalPerStone * 0.6;
+      }
+    }
+
+    // 露出バランス（ゲーム全体を通じて連続的に評価。近距離の精密シミュレーションは gasProjectionScore が別途担当）
+    score += exposureBalanceScore(grid, gameState, us);
+    // 青石の既知出現位置への事前布陣ボーナス（現在のテストルール限定）
+    score += blueTargetBonus(grid, gameState, us);
+
+    // 中央ブロック(B5: global row3-5, col3-5) 支配ボーナス
+    for (let r = 3; r <= 5; r++) {
+      for (let c = 3; c <= 5; c++) {
+        if (grid[r][c] === us) score += WEIGHTS.centerBlockBonus;
+        else if (grid[r][c] === opp) score -= WEIGHTS.centerBlockBonus;
+      }
+    }
+
+    return score;
+  }
+
+  // 現在の累計得点(gameState.scores)を取得。無ければ0扱い。
+  function currentScores(gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const my = gameState.scores && typeof gameState.scores[us] === "number" ? gameState.scores[us] : 0;
+    const op = gameState.scores && typeof gameState.scores[opp] === "number" ? gameState.scores[opp] : 0;
+    return { my, op };
+  }
+
+  // CAPTURE_15_SCOREルール対応：15個以上の一括捕獲は「即勝利/即敗北」ではなく、
+  // その時点の累計得点でどちらが勝つかによって判定する。Claude-Rushで実装・検証済みのロジックを移植。
+  function scoreAwareEndgameCheck(sim, gameState, us) {
+    if (sim.moverCapturedCount < 15 && sim.opponentCapturedCount < 15) return null;
+    const { my, op } = currentScores(gameState, us);
+    const finalMy = my + sim.moverGainPts;
+    const finalOp = op + sim.opponentGainPts;
+    if (finalMy > finalOp) return WEIGHTS.instantWinScore;
+    if (finalMy < finalOp) return -WEIGHTS.instantWinScore;
+    return 0;
+  }
+
+  function evaluateNormalMove(board, move, gameState, us) {
+    const sim = simulateMove(board, move, us);
+    const endgame = scoreAwareEndgameCheck(sim, gameState, us);
+    if (endgame !== null) return endgame;
+
+    const materialDiff = sim.moverGainPts - sim.opponentGainPts;
+    let score = materialDiff * WEIGHTS.materialPerPoint;
+
+    const grid = boardToGrid(sim.board);
+    score += evaluatePosition(grid, gameState, us);
+    score += gasProjectionScore(sim.board, gameState, us);
+    return score;
+  }
+
+  function evaluateSecretRedMove(board, move, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const { row, col } = bcToGlobal(move.place.b, move.place.c);
+    const grid = boardToGrid(board);
+    let adjEnemy = 0;
+    for (const [dr, dc] of DIRS) {
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+      if (grid[nr][nc] === opp) adjEnemy++;
+    }
+    let score = WEIGHTS.redOpportunityCost + adjEnemy * WEIGHTS.redSynergyPerAdjacentEnemy;
+
+    // 実戦棋譜の解析より、赤石は「ガス無効・呼吸点恒久遮断」という唯一無二の性質を持ち、
+    // ガス突入直前〜ガス中の攻防が事実上の決着点になることが確認できたため、
+    // 序盤で安易に使い切らず終盤まで温存するインセンティブを組み込む。
+    let timingBonus;
+    if (gameState.emptyCount > 55) timingBonus = -2.0; // 序盤：温存を強く推奨
+    else if (gameState.emptyCount > 30) timingBonus = -0.5; // 中盤：やや温存寄り
+    else if (gameState.emptyCount > WEIGHTS.gasProjectionRange) timingBonus = 1.0; // ガスが近づき価値上昇
+    else timingBonus = 2.5; // ガス直前〜ガス中：最も価値が高い局面
+    score += timingBonus;
+
+    // 直近で不発(RED_FAIL)になったマスは、同じ理由でまた潰される可能性が高いので避ける
+    if (isRecentlyFailedRedCell(move.place.b, move.place.c, gameState)) {
+      score -= 6.0;
+    }
+
+    return score;
+  }
+
+  // ---------------------------------------------------------
+  // 配置→スライドのコンボ探索
+  // 「配置フェーズ」と「スライドフェーズ」は同一プレイヤーの1ターン内で
+  // 連続して行われる可能性が高い（対戦ログより推測）。
+  // そのため配置直後、自分が続けて選べる最良のスライドまで見通して評価する。
+  // ASSUMPTION: この前提が誤りでも、単に「置いた後に自分でもう一押しした場合の
+  // 危険/チャンスを事前確認する」という安全側の探索として機能するため無害。
+  // ---------------------------------------------------------
+  function evaluatePlacementWithCombo(board, move, gameState, us) {
+    const sim1 = simulateMove(board, move, us);
+    const endgame1 = scoreAwareEndgameCheck(sim1, gameState, us);
+    if (endgame1 !== null) return { score: endgame1, finalBoard: sim1.board };
+
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const dirs = ["up", "down", "left", "right"];
+
+    let bestFinal = -Infinity;
+    let bestBoard = sim1.board;
+
+    // 「このままスライドせず終える」場合も候補に含める
+    {
+      const cumulativeMoverGain = sim1.moverGainPts;
+      const cumulativeOppGain = sim1.opponentGainPts;
+      const grid = boardToGrid(sim1.board);
+      const positional = evaluatePosition(grid, gameState, us);
+      bestFinal =
+        (cumulativeMoverGain - cumulativeOppGain) * WEIGHTS.materialPerPoint +
+        positional +
+        gasProjectionScore(sim1.board, gameState, us);
+      bestBoard = sim1.board;
+    }
+
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        const sim2 = simulateMove(sim1.board, { place: null, slide: { b, dir } }, us);
+        const combinedSim = {
+          moverCapturedCount: sim1.moverCapturedCount + sim2.moverCapturedCount,
+          opponentCapturedCount: sim1.opponentCapturedCount + sim2.opponentCapturedCount,
+          moverGainPts: sim1.moverGainPts + sim2.moverGainPts,
+          opponentGainPts: sim1.opponentGainPts + sim2.opponentGainPts,
+        };
+        const endgame2 = scoreAwareEndgameCheck(combinedSim, gameState, us);
+        if (endgame2 !== null) {
+          if (endgame2 > bestFinal) {
+            bestFinal = endgame2;
+            bestBoard = sim2.board;
+          }
+          continue;
+        }
+        const cumulativeMoverGain = combinedSim.moverGainPts;
+        const cumulativeOppGain = combinedSim.opponentGainPts;
+        const grid = boardToGrid(sim2.board);
+        const positional = evaluatePosition(grid, gameState, us);
+        const finalScore =
+          (cumulativeMoverGain - cumulativeOppGain) * WEIGHTS.materialPerPoint +
+          positional +
+          gasProjectionScore(sim2.board, gameState, us);
+        if (finalScore > bestFinal) {
+          bestFinal = finalScore;
+          bestBoard = sim2.board;
+        }
+      }
+    }
+
+    return { score: bestFinal, finalBoard: bestBoard };
+  }
+
+  // ---------------------------------------------------------
+  // 自分の色の石に隣接する空きマス一覧（相手の攻撃候補地点の絞り込み用）
+  // ---------------------------------------------------------
+  function adjacentEmptyCellsToColor(board, color) {
+    const grid = boardToGrid(board);
+    const result = [];
+    const seen = new Set();
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (grid[r][c] !== color) continue;
+        for (const [dr, dc] of DIRS) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          if (grid[nr][nc] === null) {
+            const key = nr + "," + nc;
+            if (!seen.has(key)) {
+              seen.add(key);
+              const { b, c: cc } = globalToBC(nr, nc);
+              result.push({ b, c: cc });
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  // ---------------------------------------------------------
+  // 相手の脅威スキャン：この盤面のあと相手のターンが来た場合、
+  // 「相手の単純スライド」または「自分の石の隣への配置→相手の最良スライド」で
+  // 最大何個捕獲されうるかを見積もる（1ターン内コンボを想定した防御的先読み）。
+  // 計算量を抑えるため、呼び出し元で上位候補のみに絞って使うこと。
+  // ---------------------------------------------------------
+  function opponentThreatMagnitude(board, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const dirs = ["up", "down", "left", "right"];
+    let maxCaptured = 0;
+
+    // 1) 相手の単純スライドのみ
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        const sim = simulateMove(board, { place: null, slide: { b, dir } }, opp);
+        if (sim.moverCapturedCount > maxCaptured) maxCaptured = sim.moverCapturedCount;
+      }
+    }
+
+    // 2) 自石に隣接するマスへの相手の配置 → 続けて相手の最良スライド
+    const candidateCells = adjacentEmptyCellsToColor(board, us);
+    for (const { b, c } of candidateCells) {
+      const sim1 = simulateMove(board, { place: { b, c, secretRed: false }, slide: null }, opp);
+      if (sim1.moverCapturedCount > maxCaptured) maxCaptured = sim1.moverCapturedCount;
+      for (let b2 = 0; b2 < 9; b2++) {
+        if (locked.has(b2)) continue;
+        for (const dir of dirs) {
+          const sim2 = simulateMove(sim1.board, { place: null, slide: { b: b2, dir } }, opp);
+          const total = sim1.moverCapturedCount + sim2.moverCapturedCount;
+          if (total > maxCaptured) maxCaptured = total;
+        }
+      }
+    }
+
+    return maxCaptured;
+  }
+
+  function computeEmptyCount(board) {
+    let n = 0;
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) n++;
+    return n;
+  }
+
+  // 相手も自分と同じ「配置→スライドのコンボ探索」をしてくると仮定し、その最善応手を
+  // 実際に評価してからこちらの手を選ぶ（実質2手先＝自分のフルターン→相手のフルターンまで読む）。
+  // 捕獲数だけを見る opponentThreatMagnitude より精度が高いが計算コストも高いため、
+  // 呼び出し元で候補を絞ってから使う。SECRET_RED申告はこのサブ探索では考慮しない（近似・高速化）。
+  // Claude-Rushで実装・検証済み(GPT_Strategist_v3戦で大差負けが僅差まで縮まった)のロジックを移植。
+  function bestOpponentReplyScore(board, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const emptyCount = computeEmptyCount(board);
+    const oppGameState = {
+      player: opp,
+      phase: "place",
+      redWallsLeft: 0,
+      scores: gameState.scores,
+      turnNumber: gameState.turnNumber,
+      emptyCount,
+      gasPhaseActive: gameState.gasPhaseActive,
+      slideLockedBlocks: gameState.slideLockedBlocks,
+    };
+    const candidates = generatePlaceMoves(board, oppGameState);
+    if (candidates.length === 1 && candidates[0].slide && candidates[0].slide.pass) return 0;
+
+    const quickScored = candidates
+      .filter((m) => m.place)
+      .map((move) => ({ move, quickScore: evaluateNormalMove(board, move, oppGameState, opp) }));
+    quickScored.sort((a, b) => b.quickScore - a.quickScore);
+    const pool = quickScored.slice(0, 6);
+
+    let best = -Infinity;
+    for (const { move } of pool) {
+      const combo = evaluatePlacementWithCombo(board, move, oppGameState, opp);
+      if (combo.score > best) best = combo.score;
+    }
+    return best === -Infinity ? 0 : best;
+  }
+
+  function threatPenalty(magnitude, gameState, us) {
+    if (magnitude < 15) return magnitude * WEIGHTS.materialPerPoint * 1.3;
+    // CAPTURE_15_SCORE対応：15個以上でも、その結果まだ得点で勝ち越せるなら過度に恐れない
+    const { my, op } = currentScores(gameState, us);
+    if (my > op + magnitude) return magnitude * WEIGHTS.materialPerPoint * 1.3;
+    return WEIGHTS.instantWinScore * 0.9;
+  }
+
+  function fallbackMove(board, gameState) {
+    const phase = (gameState && gameState.phase) || "place";
+    if (phase === "slide") {
+      const locked = new Set((gameState && gameState.slideLockedBlocks) || []);
+      for (let b = 0; b < 9; b++) {
+        if (!locked.has(b)) return { place: null, slide: { b, dir: "right" } };
+      }
+      return { place: null, slide: { pass: true } };
+    }
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) {
+          return { place: { b, c, secretRed: false }, slide: null };
+        }
+      }
+    }
+    return { place: null, slide: { pass: true } };
+  }
+
+  // ---------------------------------------------------------
+  // 内部メモリ（自分が申告した赤石の記録。ゲーム中エンジンは使い回される想定）
+  // ---------------------------------------------------------
+  const redDeclarationMemory = [];
+  // 申告した赤石のマスに、出現前(2ターン以内)に他の石が置かれると不発(RED_FAIL)になることが
+  // 実戦棋譜で確認できた。同じ潰されやすいマスを何度も狙い続けるのを防ぐため、
+  // 「due到来時にredになっていなければ失敗」と判定し、しばらく再挑戦を避ける。
+  const redFailedCells = new Map(); // key: "b,c" -> 失敗を検知したturnNumber
+
+  function updateRedMemory(board, gameState) {
+    for (let i = redDeclarationMemory.length - 1; i >= 0; i--) {
+      const entry = redDeclarationMemory[i];
+      if (gameState.turnNumber > entry.turn + 2) {
+        const stillPending = board[entry.b][entry.c] === "red";
+        if (!stillPending) {
+          redFailedCells.set(entry.b + "," + entry.c, gameState.turnNumber);
+        }
+        redDeclarationMemory.splice(i, 1);
+      }
+    }
+  }
+
+  function isRecentlyFailedRedCell(b, c, gameState) {
+    const key = b + "," + c;
+    if (!redFailedCells.has(key)) return false;
+    const failedTurn = redFailedCells.get(key);
+    return gameState.turnNumber - failedTurn < 20; // 20ターン程度は再挑戦を避ける
+  }
+
+  // ---------------------------------------------------------
+  // エンジン本体
+  // ---------------------------------------------------------
+  window.NTAI_Engine = {
+    name: "Claude-Topologist",
+    author: "Claude (Anthropic)",
+    version: "2.1.0", // 1.9=Rushのハントボーナス移植 / 2.0=2手先読み導入 / 2.1=絞り込み幅を終盤ほど動的に広げる(終盤の追い上げ対策)
+
+    decideNextMove: function (board, gameState) {
+      try {
+        updateRedMemory(board, gameState);
+        const us = gameState.player;
+        const phase = gameState.phase;
+
+        // ---- フェーズごとに候補を生成し、{move, score, finalBoard} の形に揃える ----
+        let evaluated = [];
+
+        if (phase === "slide") {
+          const candidates = generateSlideMoves(board, gameState);
+          if (candidates.length === 1 && candidates[0].slide.pass) return candidates[0];
+          for (const move of candidates) {
+            const score = evaluateNormalMove(board, move, gameState, us);
+            const sim = simulateMove(board, move, us);
+            evaluated.push({ move, score, finalBoard: sim.board });
+          }
+        } else {
+          const candidates = generatePlaceMoves(board, gameState);
+          if (candidates.length === 1 && candidates[0].slide && candidates[0].slide.pass) return candidates[0];
+
+          const normalMoves = candidates.filter((m) => m.place && !m.place.secretRed);
+          const redMoves = candidates.filter((m) => m.place && m.place.secretRed);
+
+          // 通常配置：まず軽い1手評価で足切りしてから、上位のみコンボ探索(配置+続けてのスライド)を行う
+          const quickScored = normalMoves.map((move) => ({
+            move,
+            quickScore: evaluateNormalMove(board, move, gameState, us),
+          }));
+          quickScored.sort((a, b) => b.quickScore - a.quickScore);
+          // 終盤ほど候補の母数(空きマス数)自体が減り計算余力が生まれるため、絞り込み幅を動的に広げる。
+          // 序盤〜中盤に大差をつけても終盤で追い上げられる現象が実戦で確認されたため
+          // (盤面が密になるほど本当は精査すべき候補が増えるのに、固定幅の絞り込みが仇になっていた)。
+          const comboPoolSize = gameState.emptyCount <= 35 ? Math.min(normalMoves.length, 25) : 15;
+          const comboPool = quickScored.slice(0, comboPoolSize);
+
+          for (const { move } of comboPool) {
+            const combo = evaluatePlacementWithCombo(board, move, gameState, us);
+            evaluated.push({ move, score: combo.score, finalBoard: combo.finalBoard });
+          }
+          // コンボ探索対象外の残りも、順位付けのために簡易評価のまま残しておく（保険）
+          for (const { move, quickScore } of quickScored.slice(comboPoolSize)) {
+            evaluated.push({ move, score: quickScore, finalBoard: board });
+          }
+
+          for (const move of redMoves) {
+            const score = evaluateSecretRedMove(board, move, gameState, us);
+            evaluated.push({ move, score, finalBoard: board });
+          }
+        }
+
+        if (evaluated.length === 0) return fallbackMove(board, gameState);
+
+        // ---- 相手の脅威スキャンは重いので、まず素点上位のみに絞って適用 ----
+        evaluated.sort((a, b) => b.score - a.score);
+        // bestOpponentReplyScoreはコストが高いため候補数を絞るが、これも終盤ほど広げる
+        const nearEndgame = gameState.emptyCount <= 35;
+        const threatCheckCount = phase === "slide" ? (nearEndgame ? 8 : 5) : (nearEndgame ? 7 : 4);
+        const topPool = evaluated.slice(0, threatCheckCount);
+
+        let best = null;
+        let bestAdjusted = -Infinity;
+        for (const cand of topPool) {
+          if (cand.score >= WEIGHTS.instantWinScore * 0.5) {
+            // 即勝利手はそのまま最優先
+            best = cand.move;
+            bestAdjusted = cand.score;
+            break;
+          }
+          const threat = opponentThreatMagnitude(cand.finalBoard, gameState, us);
+          const catastrophePenalty = threatPenalty(threat, gameState, us);
+          // 捕獲数だけでなく、相手が本気でコンボ探索した場合の局面評価そのものも減点材料にする
+          const oppReply = bestOpponentReplyScore(cand.finalBoard, gameState, us);
+          const adjusted = cand.score - catastrophePenalty - oppReply * 0.85;
+          if (adjusted > bestAdjusted) {
+            bestAdjusted = adjusted;
+            best = cand.move;
+          }
+        }
+
+        if (!best) best = evaluated[0].move;
+
+        if (best && best.place && best.place.secretRed) {
+          redDeclarationMemory.push({ turn: gameState.turnNumber, b: best.place.b, c: best.place.c });
+        }
+
+        return best;
+      } catch (e) {
+        // 例外時も絶対に不正な形を返さない（内蔵BOT切替を避けるための保険）
+        return fallbackMove(board, gameState);
+      }
+    },
+  };
+})();
