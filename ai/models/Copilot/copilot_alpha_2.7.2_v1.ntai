@@ -1,1 +1,647 @@
+window.NTAI_Engine = {
+  name: "Copilot_Alpha_v7",
+  decideNextMove(board, gameState) {
+    const player = gameState && gameState.player ? gameState.player : "white";
+    const opponent = player === "white" ? "black" : "white";
+    const moves = [];
 
+    if (gameState.phase === "setup" || gameState.phase === "place") {
+      this._generatePlacementMoves(board, gameState, player, opponent, moves);
+    } else if (gameState.phase === "slide") {
+      this._generateSlideMoves(board, gameState, player, opponent, moves);
+    }
+
+    if (moves.length === 0) {
+      return { place: null, slide: { pass: true } };
+    }
+
+    let best = moves[0];
+    for (let i = 1; i < moves.length; i++) {
+      if (moves[i].score > best.score) best = moves[i];
+    }
+
+    if (gameState.phase === "slide" && best.score <= 0) {
+      return { place: null, slide: { pass: true } };
+    }
+
+    if (best.type === "place") {
+      return {
+        place: { b: best.b, c: best.c, secretRed: best.secretRed || false },
+        slide: null
+      };
+    } else {
+      return {
+        place: null,
+        slide: { b: best.b, dir: best.dir }
+      };
+    }
+  },
+
+  _generatePlacementMoves(board, gameState, player, opponent, moves) {
+    const isSetup = gameState.phase === "setup";
+    const allowedBlocksSetup = [0, 2, 6, 8];
+
+    for (let b = 0; b < 9; b++) {
+      if (isSetup && allowedBlocksSetup.indexOf(b) === -1) continue;
+
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] !== null) continue;
+
+        if (isSetup && this._hasStoneOfColorInBlock(board, b, player)) {
+          continue;
+        }
+
+        // 通常配置（青石・通常石）
+        this._evaluatePlacement(board, gameState, player, opponent, b, c, false, moves);
+
+        // 赤石申告：setup以外、赤石残数があり、安全なときだけ
+        if (!isSetup && gameState.redWallsLeft > 0) {
+          if (this._isSafeRedDeclaration(board, gameState, player, opponent, b, c)) {
+            this._evaluatePlacement(board, gameState, player, opponent, b, c, true, moves);
+          }
+        }
+      }
+    }
+  },
+
+  _evaluatePlacement(board, gameState, player, opponent, b, c, secretRed, moves) {
+    const simBoard = this._cloneBoard(board);
+
+    if (!secretRed) {
+      // 通常石配置
+      simBoard[b][c] = player;
+    } else {
+      // 赤石予約地点としての簡易評価：
+      // 将来ここに自軍赤石が出現すると仮定し、形と呼吸点だけを見る
+      simBoard[b][c] = "blue-reserved"; // 実石ではないが、自軍の影響として軽く扱う
+    }
+
+    const result = this._simulateAfterMove(simBoard, gameState, player, opponent);
+    if (!result.legal) return;
+
+    const ownLoss = result.loss[player] || 0;
+    const oppLoss = result.loss[opponent] || 0;
+    const ownBlueLoss = result.blueLoss[player] || 0;
+    const oppBlueLoss = result.blueLoss[opponent] || 0;
+
+    // 大量自滅は避ける
+    if (ownLoss >= 15) return;
+
+    // 局所呼吸点評価（配置点周辺）
+    const localLibScore = this._evaluateLocalLiberties(simBoard, player, opponent, b, c);
+
+    // 形状評価
+    const shapeScore = this._evaluateShape(simBoard, player, opponent);
+
+    // 赤石申告の安全性補正
+    let redSafetyBonus = 0;
+    if (secretRed) {
+      redSafetyBonus = this._redSafetyBonus(board, gameState, player, opponent, b, c);
+    }
+
+    // v3 をベースにした控えめ強化版（v3.5 的）
+    const score =
+      oppLoss * 16 +
+      oppBlueLoss * 28 -
+      ownLoss * 18 -
+      ownBlueLoss * 30 -
+      result.gasRisk[player] * 6 +
+      result.gasRisk[opponent] * 4 +
+      shapeScore +
+      localLibScore +
+      redSafetyBonus;
+
+    moves.push({
+      type: "place",
+      b,
+      c,
+      secretRed,
+      score
+    });
+  },
+
+  _generateSlideMoves(board, gameState, player, opponent, moves) {
+    for (let b = 0; b < 9; b++) {
+      if (
+        Array.isArray(gameState.slideLockedBlocks) &&
+        gameState.slideLockedBlocks.indexOf(b) !== -1
+      ) {
+        continue;
+      }
+
+      const dirs = ["up", "down", "left", "right"];
+      for (let i = 0; i < dirs.length; i++) {
+        const dir = dirs[i];
+        const simBoard = this._cloneBoard(board);
+        this._applySlide(simBoard, b, dir);
+
+        const result = this._simulateAfterMove(simBoard, gameState, player, opponent);
+        if (!result.legal) continue;
+
+        const ownLoss = result.loss[player] || 0;
+        const oppLoss = result.loss[opponent] || 0;
+        const ownBlueLoss = result.blueLoss[player] || 0;
+        const oppBlueLoss = result.blueLoss[opponent] || 0;
+
+        // スライドでの大自滅は避ける
+        if (ownLoss >= 15) continue;
+
+        // スライド後の形状評価（呼吸点維持・相手削り）
+        const shapeScore = this._evaluateShape(simBoard, player, opponent);
+
+        // スライドによる局所呼吸点変化（ブロック全体）
+        const slideLibScore = this._evaluateBlockLibertiesDelta(board, simBoard, player, opponent, b);
+
+        // v3 ベースの強化版：形維持と相手削りを重視しつつ、自軍損失を抑える
+        const score =
+          oppLoss * 18 +
+          oppBlueLoss * 32 -
+          ownLoss * 20 -
+          ownBlueLoss * 32 -
+          result.gasRisk[player] * 7 +
+          result.gasRisk[opponent] * 5 +
+          shapeScore +
+          slideLibScore;
+
+        moves.push({
+          type: "slide",
+          b,
+          dir,
+          score
+        });
+      }
+    }
+  },
+
+  _cloneBoard(board) {
+    const nb = [];
+    for (let b = 0; b < 9; b++) {
+      nb[b] = board[b].slice();
+    }
+    return nb;
+  },
+
+  _hasStoneOfColorInBlock(board, b, color) {
+    for (let c = 0; c < 9; c++) {
+      if (board[b][c] === color) return true;
+    }
+    return false;
+  },
+
+  _simulateAfterMove(board, gameState, player, opponent) {
+    const loss = { white: 0, black: 0 };
+    const blueLoss = { white: 0, black: 0 };
+
+    this._applyCaptures(board, loss, blueLoss);
+
+    const emptyCount = this._countEmpty(board);
+    const gasRisk = { white: 0, black: 0 };
+
+    // ガス発動条件：空きセルが一定以下
+    if (emptyCount <= 10) {
+      this._applyGas(board, loss, gasRisk);
+    }
+
+    const legal =
+      this._checkSuicide(board, player) &&
+      this._checkKo(board, gameState);
+
+    return { legal, loss, blueLoss, gasRisk };
+  },
+
+  _countEmpty(board) {
+    let count = 0;
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) count++;
+      }
+    }
+    return count;
+  },
+
+  _applyCaptures(board, loss, blueLoss) {
+    const visited = {};
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        const key = b + ":" + c;
+        if (visited[key]) continue;
+
+        const color = board[b][c];
+        if (!color || color === "red" || color === "neutral" || color === "blue-reserved") {
+          continue;
+        }
+
+        const group = this._collectGroup(board, b, c, color);
+        for (let i = 0; i < group.cells.length; i++) {
+          visited[group.cells[i].b + ":" + group.cells[i].c] = true;
+        }
+
+        if (group.liberties === 0) {
+          for (let i = 0; i < group.cells.length; i++) {
+            const cb = group.cells[i].b;
+            const cc = group.cells[i].c;
+            const col = board[cb][cc];
+
+            if (col === "white" || col === "black") {
+              loss[col] = (loss[col] || 0) + 1;
+            } else if (col === "blue") {
+              const owner = this._inferBlueOwner(board, cb, cc);
+              if (owner === "white" || owner === "black") {
+                blueLoss[owner] = (blueLoss[owner] || 0) + 1;
+              }
+            }
+
+            board[cb][cc] = null;
+          }
+        }
+      }
+    }
+  },
+
+  _applyGas(board, loss, gasRisk) {
+    const toNeutral = [];
+
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] !== null) continue;
+
+        const neighbors = this._neighbors(b, c);
+        for (let i = 0; i < neighbors.length; i++) {
+          const nb = neighbors[i].b;
+          const nc = neighbors[i].c;
+          const col = board[nb][nc];
+
+          if (col === "white" || col === "black") {
+            toNeutral.push({ b: nb, c: nc, color: col });
+          }
+        }
+      }
+    }
+
+    for (let i = 0; i < toNeutral.length; i++) {
+      const cell = toNeutral[i];
+      if (board[cell.b][cell.c] === cell.color) {
+        board[cell.b][cell.c] = "neutral";
+        loss[cell.color] = (loss[cell.color] || 0) + 1;
+        gasRisk[cell.color] = (gasRisk[cell.color] || 0) + 1;
+      }
+    }
+  },
+
+  _checkSuicide(board, player) {
+    // 自殺手禁止：自軍連の呼吸点ゼロが存在したら禁止
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] !== player) continue;
+        const group = this._collectGroup(board, b, c, player);
+        if (group.liberties === 0) {
+          return false;
+        }
+      }
+    }
+    return true;
+  },
+
+  _checkKo(board, gameState) {
+    const prev = gameState && gameState.previousBoard;
+    if (!prev) return true;
+
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] !== prev[b][c]) return true;
+      }
+    }
+    return false;
+  },
+
+  _collectGroup(board, b, c, color) {
+    const stack = [{ b, c }];
+    const visited = {};
+    const cells = [];
+    let liberties = 0;
+
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      const key = cur.b + ":" + cur.c;
+      if (visited[key]) continue;
+
+      visited[key] = true;
+      cells.push(cur);
+
+      const neighbors = this._neighbors(cur.b, cur.c);
+      for (let i = 0; i < neighbors.length; i++) {
+        const nb = neighbors[i].b;
+        const nc = neighbors[i].c;
+        const val = board[nb][nc];
+
+        if (val === null) {
+          liberties++;
+        } else if (val === color) {
+          stack.push({ b: nb, c: nc });
+        }
+      }
+    }
+
+    return { cells, liberties };
+  },
+
+  _neighbors(b, c) {
+    const g = this._toGlobal(b, c);
+    const res = [];
+    const dirs = [
+      { dr: -1, dc: 0 },
+      { dr: 1, dc: 0 },
+      { dr: 0, dc: -1 },
+      { dr: 0, dc: 1 }
+    ];
+
+    for (let i = 0; i < dirs.length; i++) {
+      const nr = g.r + dirs[i].dr;
+      const nc = g.c + dirs[i].dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+
+      const idx = this._fromGlobal(nr, nc);
+      res.push({ b: idx.b, c: idx.c });
+    }
+
+    return res;
+  },
+
+  _toGlobal(b, c) {
+    const br = Math.floor(b / 3);
+    const bc = b % 3;
+    const cr = Math.floor(c / 3);
+    const cc = c % 3;
+    return { r: br * 3 + cr, c: bc * 3 + cc };
+  },
+
+  _fromGlobal(r, c) {
+    const br = Math.floor(r / 3);
+    const bc = Math.floor(c / 3);
+    const cr = r % 3;
+    const cc = c % 3;
+    const b = br * 3 + bc;
+    const cell = cr * 3 + cc;
+    return { b, c: cell };
+  },
+
+  _applySlide(board, b, dir) {
+    const block = board[b].slice();
+    const get = (r, c) => block[r * 3 + c];
+    const set = (r, c, v, target) => {
+      target[r * 3 + c] = v;
+    };
+    const newBlock = new Array(9);
+
+    if (dir === "right") {
+      set(0, 0, get(0, 2), newBlock);
+      set(0, 1, get(0, 0), newBlock);
+      set(0, 2, get(0, 1), newBlock);
+      set(1, 0, get(1, 2), newBlock);
+      set(1, 1, get(1, 0), newBlock);
+      set(1, 2, get(1, 1), newBlock);
+      set(2, 0, get(2, 2), newBlock);
+      set(2, 1, get(2, 0), newBlock);
+      set(2, 2, get(2, 1), newBlock);
+    } else if (dir === "left") {
+      set(0, 0, get(0, 1), newBlock);
+      set(0, 1, get(0, 2), newBlock);
+      set(0, 2, get(0, 0), newBlock);
+      set(1, 0, get(1, 1), newBlock);
+      set(1, 1, get(1, 2), newBlock);
+      set(1, 2, get(1, 0), newBlock);
+      set(2, 0, get(2, 1), newBlock);
+      set(2, 1, get(2, 2), newBlock);
+      set(2, 2, get(2, 0), newBlock);
+    } else if (dir === "down") {
+      set(0, 0, get(2, 0), newBlock);
+      set(0, 1, get(2, 1), newBlock);
+      set(0, 2, get(2, 2), newBlock);
+      set(1, 0, get(0, 0), newBlock);
+      set(1, 1, get(0, 1), newBlock);
+      set(1, 2, get(0, 2), newBlock);
+      set(2, 0, get(1, 0), newBlock);
+      set(2, 1, get(1, 1), newBlock);
+      set(2, 2, get(1, 2), newBlock);
+    } else if (dir === "up") {
+      set(0, 0, get(1, 0), newBlock);
+      set(0, 1, get(1, 1), newBlock);
+      set(0, 2, get(1, 2), newBlock);
+      set(1, 0, get(2, 0), newBlock);
+      set(1, 1, get(2, 1), newBlock);
+      set(1, 2, get(2, 2), newBlock);
+      set(2, 0, get(0, 0), newBlock);
+      set(2, 1, get(0, 1), newBlock);
+      set(2, 2, get(0, 2), newBlock);
+    } else {
+      return;
+    }
+
+    board[b] = newBlock;
+  },
+
+  _inferBlueOwner(board, b, c) {
+    const neighbors = this._neighbors(b, c);
+    let whiteAdj = 0;
+    let blackAdj = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const nb = neighbors[i].b;
+      const nc = neighbors[i].c;
+      const val = board[nb][nc];
+
+      if (val === "white") whiteAdj++;
+      else if (val === "black") blackAdj++;
+    }
+
+    if (whiteAdj > blackAdj) return "white";
+    if (blackAdj > whiteAdj) return "black";
+    return null;
+  },
+
+  _evaluateShape(board, player, opponent) {
+    let score = 0;
+
+    // 自軍・相手連のサイズと呼吸点
+    const visited = {};
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        const key = b + ":" + c;
+        if (visited[key]) continue;
+
+        const val = board[b][c];
+        if (val !== player && val !== opponent) continue;
+
+        const group = this._collectGroup(board, b, c, val);
+        for (let i = 0; i < group.cells.length; i++) {
+          visited[group.cells[i].b + ":" + group.cells[i].c] = true;
+        }
+
+        const size = group.cells.length;
+        const libs = group.liberties;
+
+        if (val === player) {
+          // v3 より少し強化：呼吸点重視
+          score += size * 2 + libs * 4;
+        } else if (val === opponent) {
+          score -= size * 2 + libs * 4;
+        }
+      }
+    }
+
+    // 青石の周囲：価値は控えめに
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === "blue") {
+          const owner = this._inferBlueOwner(board, b, c);
+          if (owner === player) score += 8;
+          else if (owner === opponent) score -= 8;
+        }
+      }
+    }
+
+    // 赤石の周囲：自軍が近いとプラス、相手が近いとマイナス
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === "red") {
+          const neighbors = this._neighbors(b, c);
+          let pAdj = 0;
+          let oAdj = 0;
+
+          for (let i = 0; i < neighbors.length; i++) {
+            const nb = neighbors[i].b;
+            const nc = neighbors[i].c;
+            const val = board[nb][nc];
+
+            if (val === player) pAdj++;
+            else if (val === opponent) oAdj++;
+          }
+
+          score += (pAdj - oAdj) * 3;
+        }
+      }
+    }
+
+    return score;
+  },
+
+  _evaluateLocalLiberties(board, player, opponent, b, c) {
+    // 配置点周辺の呼吸点変化を簡易評価
+    const neighbors = this._neighbors(b, c);
+    let score = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const nb = neighbors[i].b;
+      const nc = neighbors[i].c;
+      const val = board[nb][nc];
+
+      if (val === player) {
+        const group = this._collectGroup(board, nb, nc, player);
+        score += Math.min(group.liberties, 4); // 呼吸点増加を控えめに評価
+      } else if (val === opponent) {
+        const group = this._collectGroup(board, nb, nc, opponent);
+        if (group.liberties <= 2) {
+          score += 3; // 相手の呼吸点削りを少し評価
+        }
+      }
+    }
+
+    return score;
+  },
+
+  _evaluateBlockLibertiesDelta(oldBoard, newBoard, player, opponent, b) {
+    // スライド前後でブロック内の自軍・相手連の呼吸点変化を評価
+    let score = 0;
+
+    const evalSide = (board, color) => {
+      let totalLibs = 0;
+      const visited = {};
+      for (let c = 0; c < 9; c++) {
+        const key = b + ":" + c + ":" + color;
+        if (visited[key]) continue;
+        if (board[b][c] !== color) continue;
+
+        const group = this._collectGroup(board, b, c, color);
+        for (let i = 0; i < group.cells.length; i++) {
+          visited[b + ":" + group.cells[i].c + ":" + color] = true;
+        }
+        totalLibs += group.liberties;
+      }
+      return totalLibs;
+    };
+
+    const oldOwnLibs = evalSide(oldBoard, player);
+    const newOwnLibs = evalSide(newBoard, player);
+    const oldOppLibs = evalSide(oldBoard, opponent);
+    const newOppLibs = evalSide(newBoard, opponent);
+
+    const ownDelta = newOwnLibs - oldOwnLibs;
+    const oppDelta = newOppLibs - oldOppLibs;
+
+    // 自軍呼吸点減少を強く嫌い、相手呼吸点減少を評価
+    score += ownDelta * 3;
+    score -= oppDelta * 3;
+
+    return score;
+  },
+
+  _isSafeRedDeclaration(board, gameState, player, opponent, b, c) {
+    // 赤石申告の安全判定：
+    // - 周囲自軍隣接が多い
+    // - 相手連の内部（呼吸点ゼロ近く）には出現しない
+    // - ガス直前（空きセル少ない）は避ける
+    const emptyCount = this._countEmpty(board);
+    if (emptyCount <= 8) return false; // ガス直前は申告しない
+
+    const neighbors = this._neighbors(b, c);
+    let ownAdj = 0;
+    let oppAdj = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const nb = neighbors[i].b;
+      const nc = neighbors[i].c;
+      const val = board[nb][nc];
+
+      if (val === player) ownAdj++;
+      else if (val === opponent) oppAdj++;
+    }
+
+    if (ownAdj < 2) return false; // 自軍隣接が少ない場所は避ける
+    if (oppAdj >= 2) return false; // 相手に囲まれた場所は避ける
+
+    // 相手連の内部（呼吸点少ない）に重なるか簡易チェック
+    for (let i = 0; i < neighbors.length; i++) {
+      const nb = neighbors[i].b;
+      const nc = neighbors[i].c;
+      const val = board[nb][nc];
+
+      if (val === opponent) {
+        const group = this._collectGroup(board, nb, nc, opponent);
+        if (group.liberties <= 1) {
+          // 相手連のほぼ内部に赤石が出る形はリスクが高いので避ける
+          return false;
+        }
+      }
+    }
+
+    return true;
+  },
+
+  _redSafetyBonus(board, gameState, player, opponent, b, c) {
+    const neighbors = this._neighbors(b, c);
+    let ownAdj = 0;
+    let oppAdj = 0;
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const nb = neighbors[i].b;
+      const nc = neighbors[i].c;
+      const val = board[nb][nc];
+
+      if (val === player) ownAdj++;
+      else if (val === opponent) oppAdj++;
+    }
+
+    // 安全な赤石申告に対して控えめなボーナス
+    return (ownAdj - oppAdj) * 2;
+  }
+};
