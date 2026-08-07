@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const MANIFEST_URL = 'ai/manifest.json';
+  const MANIFEST_URL = window.NTAI_MANIFEST_URL || 'ai/manifest.json';
   let manifest = null;
 
   function byId(id) {
@@ -44,9 +44,9 @@
 
   async function fetchManifest() {
     const response = await fetch(`${MANIFEST_URL}?v=${Date.now()}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`manifest.json: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${MANIFEST_URL}: HTTP ${response.status}`);
     const data = await response.json();
-    if (!Array.isArray(data.groups)) throw new Error('manifest.json の groups が不正です');
+    if (!Array.isArray(data.groups)) throw new Error(`${MANIFEST_URL} の groups が不正です`);
     return data;
   }
 
