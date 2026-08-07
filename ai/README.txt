@@ -1,20 +1,27 @@
 NTAI registration
 =================
 
-1. Put the .ntai file in this ai/ folder.
-2. Add one model entry to manifest.json.
-3. Do not edit index.html.
+Version manifests
+-----------------
+
+- manifest.json            : v2.7.2 Official
+- manifest_2.8.json        : v2.8 Official
+
+Register an NTAI only in the manifest for the ruleset it was built for.
+Do not mix v2.7.2 engines into the v2.8 manifest unless that engine has been explicitly updated and tested for v2.8.
+
+Model files may remain under ai/models/<provider>/. The manifest controls which ruleset exposes them.
 
 Example model entry:
 
 {
-  "id": "gpt-alpha-v8",
-  "name": "GPT Alpha v8",
-  "version": "v8",
+  "id": "gpt-alpha-2.8-v1",
+  "name": "GPT Alpha",
+  "version": "2.8 / v1",
   "latest": true,
   "type": "ntai",
-  "file": "ai/gpt-alpha-v8.ntai"
+  "file": "ai/models/GPT/GPT_Alpha_2.8_v1.ntai"
 }
 
 Place newer models above older models inside each group's models array.
-Only models compatible with ruleVersion 2.7.2 should be registered here.
+The current external model set in manifest.json is for v2.7.2.
