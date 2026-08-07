@@ -1,0 +1,463 @@
+/**
+ * Nine Topology v2.7 AI Engine
+ * Engine Name: Gemini_Alpha_v10
+ * Author: Google / Gemini
+ * Description: Deep Search Engine with Alpha-Beta Pruning & Transposition Table
+ */
+
+(function () {
+  const NT_DIRS = ["up", "down", "left", "right"];
+  const TT = new Map(); // 置換表 (Transposition Table)
+
+  // --- Utility Functions ---
+  function cloneBoard(board) {
+    return board.map(block => block.slice());
+  }
+
+  function boardToGrid(board) {
+    const grid = Array.from({ length: 9 }, () => Array(9).fill(null));
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        const row = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+        const col = (b % 3) * 3 + (c % 3);
+        grid[row][col] = board[b][c];
+      }
+    }
+    return grid;
+  }
+
+  function gridToBoard(grid) {
+    const board = Array.from({ length: 9 }, () => Array(9).fill(null));
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const b = Math.floor(row / 3) * 3 + Math.floor(col / 3);
+        const c = (row % 3) * 3 + (c % 3);
+        board[b][c] = grid[row][col];
+      }
+    }
+    return board;
+  }
+
+  function getBoardKey(board, player) {
+    let key = player + ":";
+    for (let b = 0; b < 9; b++) {
+      key += board[b].map(v => v === null ? "." : v[0]).join("");
+    }
+    return key;
+  }
+
+  /**
+   * 群と呼吸点の解析
+   */
+  function getGroupInfo(grid, startRow, startCol) {
+    const stone = grid[startRow][startCol];
+    if (!stone || ["red", "SECRET_RED", "neutral", "blue-reserved"].includes(stone)) {
+      return { stone, stones: [], liberties: 99 };
+    }
+
+    const visited = Array.from({ length: 9 }, () => Array(9).fill(false));
+    const queue = [[startRow, startCol]];
+    const stones = [];
+    const liberties = new Set();
+    const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    visited[startRow][startCol] = true;
+
+    while (queue.length > 0) {
+      const [r, c] = queue.shift();
+      stones.push({ row: r, col: c });
+
+      for (const [dr, dc] of directions) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+
+        const neighbor = grid[nr][nc];
+        if (neighbor === null) {
+          liberties.add(`${nr},${nc}`);
+        } else if (neighbor === stone && !visited[nr][nc]) {
+          visited[nr][nc] = true;
+          queue.push([nr, nc]);
+        }
+      }
+    }
+
+    return { stone, stones, liberties: liberties.size };
+  }
+
+  /**
+   * 呼吸点0の群を同時捕獲
+   */
+  function resolveCaptures(board) {
+    const grid = boardToGrid(board);
+    const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+    const captured = { white: 0, black: 0, blue: 0, points: { white: 0, black: 0 } };
+    const capturedGroups = [];
+
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const stone = grid[row][col];
+        if (!["white", "black", "blue"].includes(stone) || checked[row][col]) {
+          continue;
+        }
+
+        const group = getGroupInfo(grid, row, col);
+        for (const pos of group.stones) {
+          checked[pos.row][pos.col] = true;
+        }
+
+        if (group.liberties === 0) {
+          captured[stone] = (captured[stone] || 0) + group.stones.length;
+          capturedGroups.push(group);
+        }
+      }
+    }
+
+    for (const group of capturedGroups) {
+      for (const pos of group.stones) {
+        grid[pos.row][pos.col] = null;
+      }
+    }
+
+    captured.points.white = (captured.black || 0) + (captured.blue || 0) * 5;
+    captured.points.black = (captured.white || 0) + (captured.blue || 0) * 5;
+
+    return {
+      board: gridToBoard(grid),
+      captured,
+      groups: capturedGroups
+    };
+  }
+
+  function applyGasPhase(board) {
+    const grid = boardToGrid(board);
+    const nextGrid = boardToGrid(board);
+    const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const stone = grid[r][c];
+        if (stone === "white" || stone === "black") {
+          let adjacentToEmpty = false;
+          for (const [dr, dc] of directions) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+              if (grid[nr][nc] === null) {
+                adjacentToEmpty = true;
+                break;
+              }
+            }
+          }
+          if (adjacentToEmpty) {
+            nextGrid[r][c] = "neutral";
+          }
+        }
+      }
+    }
+    return gridToBoard(nextGrid);
+  }
+
+  function slideBlock(board, blockIndex, direction) {
+    const next = cloneBoard(board);
+    const block = next[blockIndex];
+    if (!block || !NT_DIRS.includes(direction)) return null;
+
+    if (direction === "right") {
+      [block[0], block[1], block[2]] = [block[2], block[0], block[1]];
+      [block[3], block[4], block[5]] = [block[5], block[3], block[4]];
+      [block[6], block[7], block[8]] = [block[8], block[6], block[7]];
+    } else if (direction === "left") {
+      [block[0], block[1], block[2]] = [block[1], block[2], block[0]];
+      [block[3], block[4], block[5]] = [block[4], block[5], block[3]];
+      [block[6], block[7], block[8]] = [block[7], block[8], block[6]];
+    } else if (direction === "down") {
+      [block[0], block[3], block[6]] = [block[6], block[0], block[3]];
+      [block[1], block[4], block[7]] = [block[7], block[1], block[4]];
+      [block[2], block[5], block[8]] = [block[8], block[2], block[5]];
+    } else if (direction === "up") {
+      [block[0], block[3], block[6]] = [block[3], block[6], block[0]];
+      [block[1], block[4], block[7]] = [block[4], block[7], block[1]];
+      [block[2], block[5], block[8]] = [block[8], block[2], block[5]];
+    }
+
+    return resolveCaptures(next);
+  }
+
+  function simulatePlace(board, player, b, c, isSecretRed = false) {
+    if (!board[b] || board[b][c] !== null) {
+      return { legal: false, reason: "occupied" };
+    }
+
+    const next = cloneBoard(board);
+    next[b][c] = isSecretRed ? "SECRET_RED" : player;
+
+    const result = resolveCaptures(next);
+    const grid = boardToGrid(result.board);
+
+    const row = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+    const col = (b % 3) * 3 + (c % 3);
+    const selfGroup = getGroupInfo(grid, row, col);
+
+    const opponent = player === "white" ? "black" : "white";
+    const capturedEnemy = result.captured[opponent] || 0;
+    const capturedBlue = result.captured.blue || 0;
+
+    if (!isSecretRed && selfGroup.liberties === 0 && capturedEnemy === 0 && capturedBlue === 0) {
+      return { legal: false, reason: "suicide" };
+    }
+
+    return {
+      legal: true,
+      board: result.board,
+      captured: result.captured,
+      ownGroupSize: selfGroup.stones.length,
+      ownLiberties: selfGroup.liberties
+    };
+  }
+
+  function countEmptySlots(board) {
+    let count = 0;
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * 強化型盤面評価関数 (v10 Deep Evaluation)
+   */
+  function evaluateBoard(board, myColor, emptyCount) {
+    const oppColor = myColor === "white" ? "black" : "white";
+
+    let evalBoard = board;
+    if (emptyCount <= 14) {
+      evalBoard = applyGasPhase(board);
+    }
+
+    const grid = boardToGrid(evalBoard);
+    const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+
+    let score = 0;
+
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const stone = grid[r][c];
+
+        if (stone === "red" || stone === "SECRET_RED") {
+          const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+          for (const [dr, dc] of dirs) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+              if (grid[nr][nc] === myColor) score += 20;
+              if (grid[nr][nc] === oppColor) score += 30;
+            }
+          }
+        }
+
+        if ((stone === myColor || stone === oppColor) && !checked[r][c]) {
+          const group = getGroupInfo(grid, r, c);
+          for (const pos of group.stones) {
+            checked[pos.row][pos.col] = true;
+          }
+
+          const groupSize = group.stones.length;
+          const libs = group.liberties;
+
+          if (stone === myColor) {
+            score += groupSize * 20;
+            if (libs === 1) score -= groupSize * 150; // 即死回避
+            else if (libs === 2) score += 15;
+            else score += libs * 10;
+          } else {
+            score -= groupSize * 15;
+            if (libs === 1) score += groupSize * 100; // 圧殺インセンティブ
+            else if (libs === 2) score += groupSize * 35;
+          }
+        }
+      }
+    }
+    return score;
+  }
+
+  /**
+   * ミニマックス / α-β 探索 (Alpha-Beta Search Engine)
+   */
+  function minimax(board, depth, alpha, beta, isMaximizing, myColor, emptyCount) {
+    const key = getBoardKey(board, isMaximizing ? myColor : (myColor === "white" ? "black" : "white"));
+    if (TT.has(key)) {
+      return TT.get(key);
+    }
+
+    if (depth === 0 || emptyCount <= 10) {
+      const evalVal = evaluateBoard(board, myColor, emptyCount);
+      TT.set(key, evalVal);
+      return evalVal;
+    }
+
+    const currColor = isMaximizing ? myColor : (myColor === "white" ? "black" : "white");
+    const oppColor = currColor === "white" ? "black" : "white";
+
+    if (isMaximizing) {
+      let maxEval = -Infinity;
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] !== null) continue;
+          const sim = simulatePlace(board, currColor, b, c, false);
+          if (sim.legal) {
+            const capturedStones = sim.captured[oppColor] || 0;
+            if (capturedStones >= 15) return 999999;
+
+            const evalVal = minimax(sim.board, depth - 1, alpha, beta, false, myColor, emptyCount - 1);
+            maxEval = Math.max(maxEval, evalVal);
+            alpha = Math.max(alpha, evalVal);
+            if (beta <= alpha) break;
+          }
+        }
+      }
+      TT.set(key, maxEval);
+      return maxEval;
+    } else {
+      let minEval = Infinity;
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] !== null) continue;
+          const sim = simulatePlace(board, currColor, b, c, false);
+          if (sim.legal) {
+            const capturedStones = sim.captured[myColor] || 0;
+            if (capturedStones >= 15) return -999999;
+
+            const evalVal = minimax(sim.board, depth - 1, alpha, beta, true, myColor, emptyCount - 1);
+            minEval = Math.min(minEval, evalVal);
+            beta = Math.min(beta, evalVal);
+            if (beta <= alpha) break;
+          }
+        }
+      }
+      TT.set(key, minEval);
+      return minEval;
+    }
+  }
+
+  // --- Engine Definition ---
+  window.NTAI_Engine = {
+    name: "Gemini_Alpha_v10",
+    author: "Google / Gemini",
+
+    decideNextMove(board, gameState) {
+      TT.clear(); // 毎ターン置換表リセット
+
+      const myColor = gameState.player;
+      const oppColor = myColor === "white" ? "black" : "white";
+      const phase = gameState.phase || "place";
+      const emptyCount = gameState.emptyCount !== undefined ? gameState.emptyCount : countEmptySlots(board);
+      const locked = gameState.slideLockedBlocks || [];
+      const redWallsLeft = gameState.redWallsLeft !== undefined ? gameState.redWallsLeft : 0;
+
+      // 序盤の定石（Opening Book: B4, B5, B6の中央優先）
+      if (emptyCount >= 75) {
+        const centerBlocks = [4, 1, 3, 5, 7];
+        for (const b of centerBlocks) {
+          if (board[b][4] === null) {
+            return { place: { b, c: 4, secretRed: false }, slide: null };
+          }
+        }
+      }
+
+      // Setup / Place Phase
+      if (phase === "setup" || phase === "place") {
+        let bestMove = null;
+        let bestScore = -Infinity;
+        const fallbackMoves = [];
+
+        for (let b = 0; b < 9; b++) {
+          for (let c = 0; c < 9; c++) {
+            if (board[b][c] !== null) continue;
+
+            fallbackMoves.push({ b, c, secretRed: false });
+
+            // 1. 通常配置 (3手先読み)
+            const simNormal = simulatePlace(board, myColor, b, c, false);
+            if (simNormal.legal) {
+              const capturedStones = simNormal.captured[oppColor] || 0;
+              if (capturedStones >= 15) {
+                return { place: { b, c, secretRed: false }, slide: null };
+              }
+
+              const score = minimax(simNormal.board, 2, -Infinity, Infinity, false, myColor, emptyCount - 1);
+
+              if (score > bestScore) {
+                bestScore = score;
+                bestMove = { b, c, secretRed: false };
+              }
+            }
+
+            // 2. 赤石 (SECRET_RED) 宣言
+            if (redWallsLeft > 0) {
+              const simRed = simulatePlace(board, myColor, b, c, true);
+              if (simRed.legal) {
+                const scoreRed = minimax(simRed.board, 2, -Infinity, Infinity, false, myColor, emptyCount - 1) + 40;
+
+                if (scoreRed > bestScore) {
+                  bestScore = scoreRed;
+                  bestMove = { b, c, secretRed: true };
+                }
+              }
+            }
+          }
+        }
+
+        if (bestMove) {
+          return { place: bestMove, slide: null };
+        }
+
+        if (fallbackMoves.length > 0) {
+          return { place: fallbackMoves[0], slide: null };
+        }
+      }
+
+      // Slide Phase
+      if (phase === "slide") {
+        if (emptyCount <= 15) {
+          return { place: null, slide: { pass: true } };
+        }
+
+        let bestSlide = null;
+        let bestSlideScore = -Infinity;
+
+        for (let b = 0; b < 9; b++) {
+          if (locked.includes(b)) continue;
+
+          for (const dir of NT_DIRS) {
+            const sim = slideBlock(board, b, dir);
+            if (!sim) continue;
+
+            const capturedStones = sim.captured[oppColor] || 0;
+            if (capturedStones >= 15) {
+              return { place: null, slide: { b, dir } };
+            }
+
+            const score = evaluateBoard(sim.board, myColor, emptyCount);
+            if (score > bestSlideScore) {
+              bestSlideScore = score;
+              bestSlide = { b, dir };
+            }
+          }
+        }
+
+        const passScore = evaluateBoard(board, myColor, emptyCount);
+
+        if (!bestSlide || bestSlideScore < passScore) {
+          return { place: null, slide: { pass: true } };
+        }
+
+        return { place: null, slide: bestSlide };
+      }
+
+      return { place: null, slide: { pass: true } };
+    }
+  };
+})();
