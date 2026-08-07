@@ -19,10 +19,18 @@
       "label": "OpenAI",
       "models": [
         {
+          "id": "gpt-alpha-2.7.2-v3",
+          "name": "GPT Alpha",
+          "version": "2.7.2 / v3",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/GPT/GPT_Alpha_2.7.2_v3.ntai"
+        },
+        {
           "id": "gpt-alpha-2.7.2-v2",
           "name": "GPT Alpha",
           "version": "2.7.2 / v2",
-          "latest": true,
+          "latest": false,
           "type": "ntai",
           "file": "ai/models/GPT/GPT_Alpha_2.7.2_v2.ntai"
         }
@@ -33,18 +41,34 @@
       "label": "Anthropic",
       "models": [
         {
+          "id": "claude-topologist-2.7.2-v2",
+          "name": "Claude Topologist",
+          "version": "2.7.2 / v2",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-topologist_2.7.2_v2.ntai"
+        },
+        {
           "id": "claude-topologist-2.7.2-v1",
           "name": "Claude Topologist",
           "version": "2.7.2 / v1",
-          "latest": true,
+          "latest": false,
           "type": "ntai",
           "file": "ai/models/Claude/Claude-topologist_2.7.2_v1.ntai"
+        },
+        {
+          "id": "claude-sonnet-steadfast-2.7.2-v5",
+          "name": "Claude Sonnet Steadfast",
+          "version": "2.7.2 / v5",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-Sonnet_Steadfast_2.7.2_v5.ntai"
         },
         {
           "id": "claude-sonnet-steadfast-2.7.2-v4",
           "name": "Claude Sonnet Steadfast",
           "version": "2.7.2 / v4",
-          "latest": true,
+          "latest": false,
           "type": "ntai",
           "file": "ai/models/Claude/Claude-Sonnet_Steadfast_2.7.2_v4.ntai"
         }
