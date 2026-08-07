@@ -9,10 +9,10 @@ This README summarizes the official v2.7.2 ruleset. It is not an AI API specific
 Older NTAI engines for development matches and reference testing.  
 自作NTAIの開発対局・比較テスト用に、旧世代のNTAIを公開しています。
 
-- [GPT — GPT_Alpha_v9.ntai](./ai/models/legacy/GPT_Alpha_v9.ntai)
-- [Claude — claude-topologist_v8.ntai](./ai/models/legacy/claude-topologist_v8.ntai)
-- [Gemini — Gemini_Alpha_v10.ntai](./ai/models/legacy/Gemini_Alpha_v10.ntai)
-- [Grok — Grok_Alpha_v15.ntai](./ai/models/legacy/Grok_Alpha_v15.ntai)
+- [GPT — GPT_Alpha_v9.ntai](https://raw.githubusercontent.com/tokikagura/nine-topology/main/ai/models/legacy/GPT_Alpha_v9.ntai)
+- [Claude — claude-topologist_v8.ntai](https://raw.githubusercontent.com/tokikagura/nine-topology/main/ai/models/legacy/claude-topologist_v8.ntai)
+- [Gemini — Gemini_Alpha_v10.ntai](https://raw.githubusercontent.com/tokikagura/nine-topology/main/ai/models/legacy/Gemini_Alpha_v10.ntai)
+- [Grok — Grok_Alpha_v15.ntai](https://raw.githubusercontent.com/tokikagura/nine-topology/main/ai/models/legacy/Grok_Alpha_v15.ntai)
 
 ## English
 
