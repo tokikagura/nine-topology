@@ -1,8 +1,16 @@
 # Nine Topology
 
-Quick Rule Guide for Game Version v2.7.2
+## Active Version Map
 
-This README summarizes the official v2.7.2 ruleset. It is not an AI API specification. Features from the separate v2.8 test ruleset are not included here.
+- **v2.7.2 Official** — `index.html` / `js/` / `ai/manifest.json`
+- **v2.8 Official** — `index_2.8.html` / `js/v280/` / `ai/manifest_2.8.json`
+- **Development runner** — `runner_dev.html` can launch v2.7.2 or v2.8 and inject local `.ntai` / `.js` engines.
+
+The current registered external NTAI models are v2.7.2 models. v2.8 uses a separate manifest so incompatible model generations are not mixed.
+
+## Quick Rule Guide for Game Version v2.7.2
+
+This README section summarizes the official v2.7.2 ruleset. It is not an AI API specification. v2.8 is a separate official ruleset.
 
 ## Legacy NTAI Downloads / レガシーNTAI ダウンロード
 
@@ -240,7 +248,7 @@ Turn 128 is recorded normally. Immediately afterward, the game ends by cumulativ
 
 This README describes v2.7.2 only.
 
-The following v2.8-test features are not part of v2.7.2:
+The following v2.8 official features are not part of v2.7.2:
 
 - three Blue Stones;
 - Blue Stones worth 0 points;
@@ -479,7 +487,7 @@ Nine Topology v2.7.2では青石を1個使用します。
 
 このREADMEはv2.7.2のみを説明しています。
 
-次の要素はv2.8テスト版の仕様であり、v2.7.2には含まれません。
+次の要素はv2.8正式版の仕様であり、v2.7.2には含まれません。
 
 - 3個の青石
 - 青石0点
