@@ -134,7 +134,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.8-test スタート！");
+      logMessage("【BOT対局開始】v2.8 スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;

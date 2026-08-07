@@ -37,7 +37,7 @@
     const logPanel = document.getElementById('log-panel');
     if (logPanel) logPanel.innerHTML = '';
 
-    logMessage('システム起動 v2.8-test。青石は0点、確保1個につきガス被害を最大5石防御。B1-c3初期・B9-a1=12T・B5-b2=50T。');
+    logMessage('システム起動 v2.8。青石は0点、確保1個につきガス被害を最大5石防御。B1-c3初期・B9-a1=12T・B5-b2=50T。');
     renderBoard();
   }
 
@@ -156,7 +156,7 @@
     gamePhase = 'gameover';
     isWallDeclarationActive = false;
 
-    // v2.8-test: 15個以上の損失は即終局のトリガーに限定し、
+    // v2.8: 15個以上の損失は即終局のトリガーに限定し、
     // 片側損失・双方損失のどちらでも、加算済みの累計得点で勝敗を決める。
     let winner = 'Draw';
     let resultText = '累計得点も同点のため引き分け';
