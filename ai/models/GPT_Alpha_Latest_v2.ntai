@@ -1,0 +1,1633 @@
+/**
+ * NTAI Engine - GPT Alpha Latest v2
+ * AI Name: GPT_Alpha_Latest_v2
+ * Author: OpenAI GPT x Tokikagura
+ * Target: Nine Topology v2.7.2
+ *
+ * Latest v2 changes:
+ * - Searches full placement-plus-slide variants instead of collapsing each placement to one greedy slide.
+ * - Makes opponent reply selection directly adversarial from the root position's perspective.
+ * - Strengthens late mobility survival and one-turn-ahead Gas forecasting.
+ * - Adds simple-Ko memory for the engine's real move, reducing invalid fallback placements.
+ * - Requires Red Barrier targets to survive several plausible opponent replies.
+ * - Keeps the official v2.7.2 scoring, Gas, Blue Stone, and delayed Red Stone order.
+ */
+window.NTAI_Engine = {
+  name: "GPT_Alpha_Latest_v2",
+  author: "OpenAI GPT x Tokikagura",
+  _plan: null,
+  _lastTurnSeen: 0,
+  _recentSlides: [],
+  _recentBoards: [],
+  _lastRedTurn: -99,
+  _previousOwnEndKey: null,
+
+  decideNextMove: function (board, gameState) {
+    "use strict";
+
+    const engine = this;
+    const me = gameState.player;
+    const enemy = me === "white" ? "black" : "white";
+    const phase = gameState.phase;
+    const turnNumber = Number.isFinite(Number(gameState.turnNumber))
+      ? Number(gameState.turnNumber)
+      : 1;
+    const gasPhaseActive = Boolean(gameState.gasPhaseActive);
+    const scores = {
+      white: Number(gameState.scores && gameState.scores.white) || 0,
+      black: Number(gameState.scores && gameState.scores.black) || 0
+    };
+    const redWallsLeft = Number(gameState.redWallsLeft) || 0;
+    const lockedBlocks = new Set(gameState.slideLockedBlocks || []);
+
+    const DIRS = ["up", "down", "left", "right"];
+    const CORNER_BLOCKS = [0, 2, 6, 8];
+    const BLUE_VALUE = 5;
+    const DECISIVE = 15;
+    const TURN_LIMIT = 128;
+    const WIN_VALUE = 100000000;
+
+    // Per-decision caches. They are local so one turn cannot leak stale analysis
+    // into the next turn.
+    const mobilityCache = new Map();
+    const boardEvalCache = new Map();
+    const urgentCache = new Map();
+
+    if (turnNumber < engine._lastTurnSeen || (turnNumber === 1 && phase === "setup")) {
+      engine._plan = null;
+      engine._recentSlides = [];
+      engine._recentBoards = [];
+      engine._lastRedTurn = -99;
+      engine._previousOwnEndKey = null;
+    }
+    engine._lastTurnSeen = turnNumber;
+
+    const otherOf = color => color === "white" ? "black" : "white";
+    const cloneBoard = src => src.map(block => block.slice());
+    const copyScores = src => ({ white: src.white || 0, black: src.black || 0 });
+
+    const boardKey = src => src
+      .map(block => block.map(cell => cell === null ? "." : cell).join(","))
+      .join("|");
+
+    const countEmpty = src => {
+      let total = 0;
+      for (const block of src) {
+        for (const cell of block) if (cell === null) total++;
+      }
+      return total;
+    };
+
+    const countType = (src, type) => {
+      let total = 0;
+      for (const block of src) {
+        for (const cell of block) if (cell === type) total++;
+      }
+      return total;
+    };
+
+    const toGrid = src => {
+      const grid = Array.from({ length: 9 }, () => Array(9).fill(null));
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          const r = Math.floor(b / 3) * 3 + Math.floor(c / 3);
+          const col = (b % 3) * 3 + (c % 3);
+          grid[r][col] = src[b][c];
+        }
+      }
+      return grid;
+    };
+
+    const fromGrid = grid => {
+      const out = Array.from({ length: 9 }, () => Array(9).fill(null));
+      for (let r = 0; r < 9; r++) {
+        for (let col = 0; col < 9; col++) {
+          const b = Math.floor(r / 3) * 3 + Math.floor(col / 3);
+          const c = (r % 3) * 3 + (col % 3);
+          out[b][c] = grid[r][col];
+        }
+      }
+      return out;
+    };
+
+    const blockCellToGrid = (b, c) => ({
+      r: Math.floor(b / 3) * 3 + Math.floor(c / 3),
+      col: (b % 3) * 3 + (c % 3)
+    });
+
+    const gridToBlockCell = (r, c) => ({
+      b: Math.floor(r / 3) * 3 + Math.floor(c / 3),
+      cell: (r % 3) * 3 + (c % 3)
+    });
+
+    const groupInfo = (grid, sr, sc) => {
+      const type = grid[sr][sc];
+      if (!type || type === "red" || type === "neutral" || type === "blue-reserved") {
+        return { type, stones: [], liberties: 99, libertyCells: [] };
+      }
+
+      const seen = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const queue = [[sr, sc]];
+      const stones = [];
+      const liberties = new Set();
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      seen[sr][sc] = true;
+
+      for (let qi = 0; qi < queue.length; qi++) {
+        const [r, c] = queue[qi];
+        stones.push([r, c]);
+        for (const [dr, dc] of steps) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+          const value = grid[nr][nc];
+          if (value === null) liberties.add(nr + "," + nc);
+          else if (value === type && !seen[nr][nc]) {
+            seen[nr][nc] = true;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+
+      return {
+        type,
+        stones,
+        liberties: liberties.size,
+        libertyCells: Array.from(liberties)
+      };
+    };
+
+    const collectUrgentCells = (src, perspective) => {
+      const cacheKey = perspective + "|" + boardKey(src);
+      if (urgentCache.has(cacheKey)) return urgentCache.get(cacheKey);
+
+      const grid = toGrid(src);
+      const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const urgent = new Set();
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const type = grid[r][c];
+          if (!["white", "black", "blue"].includes(type) || checked[r][c]) continue;
+          const info = groupInfo(grid, r, c);
+          for (const [gr, gc] of info.stones) checked[gr][gc] = true;
+
+          // Preserve escape cells for our endangered groups and killing cells for
+          // enemy/Blue groups. Large groups with three liberties also matter.
+          const isOwn = type === perspective;
+          const limit = isOwn
+            ? (info.stones.length >= 9 ? 3 : 2)
+            : (info.stones.length >= 12 ? 3 : 2);
+          if (info.liberties > limit) continue;
+
+          for (const key of info.libertyCells) {
+            const [lr, lc] = key.split(",").map(Number);
+            const pos = gridToBlockCell(lr, lc);
+            if (src[pos.b][pos.cell] === null) urgent.add(pos.b + "," + pos.cell);
+          }
+        }
+      }
+
+      urgentCache.set(cacheKey, urgent);
+      return urgent;
+    };
+
+    const detectZeroLibertyGroups = src => {
+      const grid = toGrid(src);
+      const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const groups = [];
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const type = grid[r][c];
+          if (!["white", "black", "blue"].includes(type) || checked[r][c]) continue;
+          const info = groupInfo(grid, r, c);
+          for (const [gr, gc] of info.stones) checked[gr][gc] = true;
+          if (info.liberties === 0) groups.push(info);
+        }
+      }
+      return { grid, groups };
+    };
+
+    const removeGroups = (grid, groups) => {
+      for (const group of groups) {
+        for (const [r, c] of group.stones) grid[r][c] = null;
+      }
+    };
+
+    const resolveSlideCaptures = src => {
+      const detected = detectZeroLibertyGroups(src);
+      const captured = { white: 0, black: 0, blue: 0 };
+      for (const group of detected.groups) captured[group.type] += group.stones.length;
+      removeGroups(detected.grid, detected.groups);
+      return {
+        board: fromGrid(detected.grid),
+        captured,
+        groups: detected.groups
+      };
+    };
+
+    const resolvePlacementCaptures = (src, player) => {
+      const target = otherOf(player);
+      const grid = toGrid(src);
+      const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const groups = [];
+      const captured = { white: 0, black: 0, blue: 0 };
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const type = grid[r][c];
+          if ((type !== target && type !== "blue") || checked[r][c]) continue;
+          const info = groupInfo(grid, r, c);
+          for (const [gr, gc] of info.stones) checked[gr][gc] = true;
+          if (info.liberties === 0) {
+            groups.push(info);
+            captured[type] += info.stones.length;
+          }
+        }
+      }
+
+      removeGroups(grid, groups);
+      return { board: fromGrid(grid), captured, groups };
+    };
+
+    const isSuicidePlacement = (src, player, b, c) => {
+      if (!src[b] || src[b][c] !== null) return true;
+      const next = cloneBoard(src);
+      next[b][c] = player;
+      const grid = toGrid(next);
+      const pos = blockCellToGrid(b, c);
+      const target = otherOf(player);
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (const [dr, dc] of steps) {
+        const nr = pos.r + dr;
+        const nc = pos.col + dc;
+        if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+        const type = grid[nr][nc];
+        if (type === target || type === "blue") {
+          if (groupInfo(grid, nr, nc).liberties === 0) return false;
+        }
+      }
+
+      return groupInfo(grid, pos.r, pos.col).liberties === 0;
+    };
+
+    const countLegalPlacements = (src, player, stopAfter = 82) => {
+      const exact = stopAfter >= 82;
+      const cacheKey = player + "|" + boardKey(src);
+      if (exact && mobilityCache.has(cacheKey)) return mobilityCache.get(cacheKey);
+
+      let total = 0;
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (src[b][c] !== null) continue;
+          if (!isSuicidePlacement(src, player, b, c)) {
+            total++;
+            if (total >= stopAfter) return total;
+          }
+        }
+      }
+
+      if (exact) mobilityCache.set(cacheKey, total);
+      return total;
+    };
+
+    const hasLegalPlacement = (src, player) => countLegalPlacements(src, player, 1) > 0;
+
+    const applyGas = src => {
+      const grid = toGrid(src);
+      const targets = new Map();
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (grid[r][c] !== null) continue;
+          for (const [dr, dc] of steps) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+            const type = grid[nr][nc];
+            if (type === "white" || type === "black") {
+              targets.set(nr + "," + nc, { r: nr, c: nc, type });
+            }
+          }
+        }
+      }
+
+      const losses = { white: 0, black: 0 };
+      for (const target of targets.values()) {
+        if (grid[target.r][target.c] === target.type) {
+          grid[target.r][target.c] = "neutral";
+          losses[target.type]++;
+        }
+      }
+
+      return { board: fromGrid(grid), losses };
+    };
+
+    const finishTurnEnvironment = (src, gasActiveBefore) => {
+      const activatesNow = !gasActiveBefore && countEmpty(src) <= 10;
+      const gasActiveAfter = gasActiveBefore || activatesNow;
+      if (!gasActiveAfter) {
+        return {
+          board: src,
+          gasActive: false,
+          gasLosses: { white: 0, black: 0 }
+        };
+      }
+      const gas = applyGas(src);
+      return {
+        board: gas.board,
+        gasActive: true,
+        gasLosses: gas.losses
+      };
+    };
+
+    const applyBlueDropIfDue = (src, nextTurn) => {
+      if (nextTurn < 5 || countType(src, "blue-reserved") === 0) return src;
+      const out = cloneBoard(src);
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (out[b][c] === "blue-reserved") out[b][c] = "blue";
+        }
+      }
+      return out;
+    };
+
+    const nextTurnNoLegalTerminal = (src, nextPlayer, nextTurn, projectedScores) => {
+      // Exact no-legal checks become worth their cost once the board is tight.
+      if (nextTurn > TURN_LIMIT || countEmpty(src) > 20) return null;
+      const prepared = applyBlueDropIfDue(src, nextTurn);
+      return hasLegalPlacement(prepared, nextPlayer)
+        ? null
+        : terminalFromNoLegal(projectedScores);
+    };
+
+    const addScoreDelta = (base, delta) => ({
+      white: (base.white || 0) + (delta.white || 0),
+      black: (base.black || 0) + (delta.black || 0)
+    });
+
+    const terminalFromScore = (projectedScores, reason) => {
+      if (projectedScores.white > projectedScores.black) return { winner: "white", reason };
+      if (projectedScores.black > projectedScores.white) return { winner: "black", reason };
+      return { winner: "draw", reason };
+    };
+
+    const terminalFromCapture = (captured, projectedScores) => {
+      const whiteLost = (captured.white || 0) >= DECISIVE;
+      const blackLost = (captured.black || 0) >= DECISIVE;
+      if (!whiteLost && !blackLost) return null;
+      return terminalFromScore(projectedScores, "CAPTURE_15_SCORE");
+    };
+
+    const terminalFromTurnLimit = projectedScores =>
+      terminalFromScore(projectedScores, "TURN_LIMIT");
+
+    const terminalFromNoLegal = projectedScores =>
+      terminalFromScore(projectedScores, "NO_LEGAL_PLACE");
+
+    const makeOutcome = ({
+      board: outBoard,
+      outScores,
+      gasActive,
+      gasLosses,
+      captured,
+      terminal,
+      action,
+      placementBoard
+    }) => ({
+      board: outBoard,
+      scores: outScores,
+      gasActive,
+      gasLosses: gasLosses || { white: 0, black: 0 },
+      captured: captured || { white: 0, black: 0, blue: 0 },
+      terminal: terminal || null,
+      action: action || null,
+      placementBoard: placementBoard || null
+    });
+
+    const slideRaw = (src, b, dir) => {
+      if (!src[b]) return null;
+      const next = cloneBoard(src);
+      const block = next[b];
+
+      if (dir === "right") {
+        [block[0], block[1], block[2]] = [block[2], block[0], block[1]];
+        [block[3], block[4], block[5]] = [block[5], block[3], block[4]];
+        [block[6], block[7], block[8]] = [block[8], block[6], block[7]];
+      } else if (dir === "left") {
+        [block[0], block[1], block[2]] = [block[1], block[2], block[0]];
+        [block[3], block[4], block[5]] = [block[4], block[5], block[3]];
+        [block[6], block[7], block[8]] = [block[7], block[8], block[6]];
+      } else if (dir === "down") {
+        [block[0], block[3], block[6]] = [block[6], block[0], block[3]];
+        [block[1], block[4], block[7]] = [block[7], block[1], block[4]];
+        [block[2], block[5], block[8]] = [block[8], block[2], block[5]];
+      } else if (dir === "up") {
+        [block[0], block[3], block[6]] = [block[3], block[6], block[0]];
+        [block[1], block[4], block[7]] = [block[4], block[7], block[1]];
+        [block[2], block[5], block[8]] = [block[5], block[8], block[2]];
+      } else {
+        return null;
+      }
+      return next;
+    };
+
+    const simulatePlacement = (
+      src,
+      player,
+      b,
+      c,
+      baseScores,
+      gasActiveBefore,
+      turn,
+      koForbiddenKey = null
+    ) => {
+      if (!src[b] || src[b][c] !== null) return { legal: false, reason: "occupied" };
+      if (isSuicidePlacement(src, player, b, c)) return { legal: false, reason: "suicide" };
+
+      const placed = cloneBoard(src);
+      placed[b][c] = player;
+      const captures = resolvePlacementCaptures(placed, player);
+      // Simple Ko compares the board immediately after placement capture with the
+      // board at the end of this same player's preceding turn.
+      if (koForbiddenKey && boardKey(captures.board) === koForbiddenKey) {
+        return { legal: false, reason: "ko" };
+      }
+      const opponent = otherOf(player);
+      const scoreDelta = { white: 0, black: 0 };
+      scoreDelta[player] = (captures.captured[opponent] || 0) + (captures.captured.blue || 0) * BLUE_VALUE;
+      const projectedScores = addScoreDelta(baseScores, scoreDelta);
+      const capturedTotal = (captures.captured[opponent] || 0) + (captures.captured.blue || 0);
+      const captureTerminal = terminalFromCapture(captures.captured, projectedScores);
+
+      if (capturedTotal > 0) {
+        const env = finishTurnEnvironment(captures.board, gasActiveBefore);
+        let terminal = captureTerminal || (turn >= TURN_LIMIT ? terminalFromTurnLimit(projectedScores) : null);
+        if (!terminal && turn < TURN_LIMIT) {
+          terminal = nextTurnNoLegalTerminal(env.board, opponent, turn + 1, projectedScores);
+        }
+        return {
+          legal: true,
+          turnEnded: true,
+          board: env.board,
+          scores: projectedScores,
+          gasActive: env.gasActive,
+          gasLosses: env.gasLosses,
+          captured: captures.captured,
+          terminal,
+          placementBoard: captures.board
+        };
+      }
+
+      const grid = toGrid(captures.board);
+      const pos = blockCellToGrid(b, c);
+      const ownGroup = grid[pos.r][pos.col] === player
+        ? groupInfo(grid, pos.r, pos.col)
+        : { stones: [], liberties: 0 };
+
+      return {
+        legal: true,
+        turnEnded: false,
+        board: captures.board,
+        scores: projectedScores,
+        gasActive: gasActiveBefore,
+        gasLosses: { white: 0, black: 0 },
+        captured: captures.captured,
+        terminal: captureTerminal,
+        placementBoard: captures.board,
+        ownGroupSize: ownGroup.stones.length,
+        ownLiberties: ownGroup.liberties
+      };
+    };
+
+    const simulateSlide = (src, player, b, dir, baseScores, gasActiveBefore, turn) => {
+      const moved = slideRaw(src, b, dir);
+      if (!moved) return { legal: false };
+      const captures = resolveSlideCaptures(moved);
+      const opponent = otherOf(player);
+      const scoreDelta = { white: 0, black: 0 };
+      scoreDelta[player] = (captures.captured[opponent] || 0) + (captures.captured.blue || 0) * BLUE_VALUE;
+      scoreDelta[opponent] = captures.captured[player] || 0;
+      const projectedScores = addScoreDelta(baseScores, scoreDelta);
+      const env = finishTurnEnvironment(captures.board, gasActiveBefore);
+      let terminal = terminalFromCapture(captures.captured, projectedScores)
+        || (turn >= TURN_LIMIT ? terminalFromTurnLimit(projectedScores) : null);
+      if (!terminal && turn < TURN_LIMIT) {
+        terminal = nextTurnNoLegalTerminal(env.board, opponent, turn + 1, projectedScores);
+      }
+
+      return makeOutcome({
+        board: env.board,
+        outScores: projectedScores,
+        gasActive: env.gasActive,
+        gasLosses: env.gasLosses,
+        captured: captures.captured,
+        terminal,
+        action: { b, dir },
+        placementBoard: src
+      });
+    };
+
+    const simulatePass = (src, player, baseScores, gasActiveBefore, turn) => {
+      const env = finishTurnEnvironment(src, gasActiveBefore);
+      const projectedScores = copyScores(baseScores);
+      let terminal = turn >= TURN_LIMIT ? terminalFromTurnLimit(projectedScores) : null;
+      if (!terminal && turn < TURN_LIMIT) {
+        terminal = nextTurnNoLegalTerminal(env.board, otherOf(player), turn + 1, projectedScores);
+      }
+      return makeOutcome({
+        board: env.board,
+        outScores: projectedScores,
+        gasActive: env.gasActive,
+        gasLosses: env.gasLosses,
+        captured: { white: 0, black: 0, blue: 0 },
+        terminal,
+        action: { pass: true },
+        placementBoard: src
+      });
+    };
+
+    const summarize = src => {
+      const grid = toGrid(src);
+      const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const summary = {
+        white: {
+          stones: 0,
+          groups: 0,
+          minLib: 99,
+          largest: 0,
+          danger: 0,
+          libertyWeight: 0,
+          atariStones: 0,
+          criticalGroups: 0
+        },
+        black: {
+          stones: 0,
+          groups: 0,
+          minLib: 99,
+          largest: 0,
+          danger: 0,
+          libertyWeight: 0,
+          atariStones: 0,
+          criticalGroups: 0
+        }
+      };
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const type = grid[r][c];
+          if ((type !== "white" && type !== "black") || checked[r][c]) continue;
+          const info = groupInfo(grid, r, c);
+          for (const [gr, gc] of info.stones) checked[gr][gc] = true;
+
+          const n = info.stones.length;
+          const libs = info.liberties;
+          const s = summary[type];
+          s.stones += n;
+          s.groups++;
+          s.minLib = Math.min(s.minLib, libs);
+          s.largest = Math.max(s.largest, n);
+          s.libertyWeight += Math.min(libs, 8) * Math.sqrt(Math.max(1, n));
+
+          if (libs === 1) {
+            s.atariStones += n;
+            s.danger += n * n * 5.2 + n * 18;
+            if (n >= DECISIVE) s.danger += 20000;
+          } else if (libs === 2) {
+            s.danger += n * n * 0.92;
+            if (n >= 12) s.criticalGroups++;
+          } else if (libs === 3 && n >= 12) {
+            s.danger += n * 2.1;
+          }
+        }
+      }
+      return summary;
+    };
+
+    const gasExposure = src => {
+      const grid = toGrid(src);
+      const exposed = { white: 0, black: 0 };
+      const seen = new Set();
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (grid[r][c] !== null) continue;
+          for (const [dr, dc] of steps) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+            const type = grid[nr][nc];
+            if (type !== "white" && type !== "black") continue;
+            const key = nr + "," + nc;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            exposed[type]++;
+          }
+        }
+      }
+      return exposed;
+    };
+
+    const blockShapeScore = (src, perspective) => {
+      const opponent = otherOf(perspective);
+      let score = 0;
+      for (let b = 0; b < 9; b++) {
+        let own = 0;
+        let opp = 0;
+        let empty = 0;
+        let red = 0;
+        let neutral = 0;
+        for (const cell of src[b]) {
+          if (cell === perspective) own++;
+          else if (cell === opponent) opp++;
+          else if (cell === null) empty++;
+          else if (cell === "red") red++;
+          else if (cell === "neutral") neutral++;
+        }
+
+        if (own >= 7) score -= 42 + (own - 7) * 34;
+        if (own === 9) score -= 180;
+        if (opp >= 7 && empty > 0) score += 18;
+        if (red > 0 && own > 0) score += red * Math.min(own, 4) * 1.6;
+        if (red > 0 && opp > 0) score -= red * Math.min(opp, 4) * 1.1;
+        if (neutral >= 5 && own > 0) score -= (neutral - 4) * own * 1.7;
+      }
+      return score;
+    };
+
+    const blueTensionScore = (src, perspective) => {
+      const grid = toGrid(src);
+      const checked = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const opponent = otherOf(perspective);
+      let score = 0;
+      const steps = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (grid[r][c] !== "blue" || checked[r][c]) continue;
+          const info = groupInfo(grid, r, c);
+          for (const [gr, gc] of info.stones) checked[gr][gc] = true;
+          let ownContact = 0;
+          let enemyContact = 0;
+          for (const [br, bc] of info.stones) {
+            for (const [dr, dc] of steps) {
+              const nr = br + dr;
+              const nc = bc + dc;
+              if (nr < 0 || nr >= 9 || nc < 0 || nc >= 9) continue;
+              if (grid[nr][nc] === perspective) ownContact++;
+              else if (grid[nr][nc] === opponent) enemyContact++;
+            }
+          }
+          const urgency = info.liberties <= 1 ? 12 : info.liberties === 2 ? 5 : 1;
+          score += (ownContact - enemyContact) * urgency * BLUE_VALUE;
+        }
+      }
+      return score;
+    };
+
+    const evaluateBoard = (src, perspective, projectedScores, gasActive, turn) => {
+      const opponent = otherOf(perspective);
+      const cacheKey = perspective + "|" + turn + "|" + (gasActive ? 1 : 0) + "|"
+        + (projectedScores.white || 0) + ":" + (projectedScores.black || 0) + "|" + boardKey(src);
+      if (boardEvalCache.has(cacheKey)) return boardEvalCache.get(cacheKey);
+
+      const s = summarize(src);
+      const mine = s[perspective];
+      const theirs = s[opponent];
+      const empties = countEmpty(src);
+      const progress = Math.min(1, Math.max(0, turn / TURN_LIMIT));
+      const pointGap = (projectedScores[perspective] || 0) - (projectedScores[opponent] || 0);
+      const leading = pointGap >= 6;
+      const trailing = pointGap <= -6;
+      let score = 0;
+
+      // Every official ending is settled by cumulative points. Keep points primary,
+      // but do not let a small early lead excuse a collapsing group.
+      const pointWeight = turn >= 118 ? 126 : 29 + progress * 47;
+      score += pointGap * pointWeight;
+      score += (mine.stones - theirs.stones) * (5.8 + progress * 2.8);
+      score += mine.libertyWeight * 3.75 - theirs.libertyWeight * 3.12;
+      score -= mine.danger * 1.10;
+      score += theirs.danger * (trailing && turn >= 68 ? 1.08 : 0.97);
+      score -= mine.atariStones * 20;
+      score += theirs.atariStones * (trailing ? 17 : 13.5);
+      score -= mine.criticalGroups * 49;
+      score += theirs.criticalGroups * (trailing ? 38 : 31);
+
+      if (mine.minLib <= 1) score -= 182;
+      if (theirs.minLib <= 1) score += trailing ? 148 : 116;
+      if (mine.largest >= DECISIVE && mine.minLib <= 2) score -= 390;
+      if (theirs.largest >= DECISIVE && theirs.minLib <= 2) score += trailing ? 325 : 238;
+
+      score += blockShapeScore(src, perspective);
+      score += blueTensionScore(src, perspective);
+
+      const exposure = gasExposure(src);
+      const gasNear = gasActive || empties <= 18;
+      if (gasNear) {
+        let pressure = gasActive ? 23 : Math.max(5, 20 - empties);
+        if (!gasActive && empties <= 13) pressure += 9;
+        score -= exposure[perspective] * pressure;
+        score += exposure[opponent] * pressure * 0.77;
+      } else {
+        score += exposure[perspective] * 0.55;
+        score -= exposure[opponent] * 0.42;
+      }
+
+      if (gasActive) {
+        score += (mine.stones - theirs.stones) * 5.4;
+        score -= mine.criticalGroups * 58;
+        score += theirs.criticalGroups * 41;
+        score -= countType(src, "neutral") * 0.10;
+      }
+
+      // Mobility is a real terminal resource. Start measuring it before the final
+      // squeeze so a visually healthy position cannot drift into NO_LEGAL_PLACE.
+      if (empties <= 32) {
+        const mobilityCap = empties <= 20 ? 82 : empties <= 26 ? 18 : 10;
+        const ownLegal = countLegalPlacements(src, perspective, mobilityCap);
+        const oppLegal = countLegalPlacements(src, opponent, mobilityCap);
+        const mobilityWeight = turn >= 108
+          ? 15.0
+          : turn >= 88
+            ? 9.4
+            : empties <= 22
+              ? 6.2
+              : 3.0;
+
+        score += (ownLegal - oppLegal) * mobilityWeight;
+        score += Math.log1p(ownLegal) * (turn >= 90 ? 28 : 12);
+        score -= Math.log1p(oppLegal) * (trailing && turn >= 90 ? 18 : 8);
+
+        if (ownLegal <= 7) {
+          const cliff = turn >= 96 ? 245 : empties <= 18 ? 155 : 62;
+          score -= (8 - ownLegal) * cliff;
+        }
+        if (oppLegal <= 7) {
+          const cliff = turn >= 96 ? 215 : empties <= 18 ? 138 : 54;
+          score += (8 - oppLegal) * cliff;
+        }
+        if (ownLegal === 1) score -= turn >= 90 ? 1100 : 520;
+        if (oppLegal === 1) score += turn >= 90 ? 940 : 440;
+
+        if (leading && turn >= 72) {
+          score += ownLegal * 3.6;
+          score -= mine.danger * 0.10;
+        } else if (trailing && turn >= 72) {
+          score -= oppLegal * 2.7;
+          score += theirs.danger * 0.16;
+        }
+      }
+
+      // One-turn-ahead Gas forecast. At 11-14 empties, the old evaluator saw only
+      // exposure; this estimates the actual neutralised board and its mobility cliff.
+      if (!gasActive && empties <= 14) {
+        const forecast = applyGas(src);
+        const ownPostLegal = countLegalPlacements(forecast.board, perspective, 18);
+        const oppPostLegal = countLegalPlacements(forecast.board, opponent, 18);
+        const urgency = empties <= 11 ? 34 : 18;
+        score -= forecast.losses[perspective] * urgency;
+        score += forecast.losses[opponent] * urgency * 0.82;
+        score += (ownPostLegal - oppPostLegal) * (turn >= 92 ? 13 : 7);
+        if (ownPostLegal <= 3) score -= (4 - ownPostLegal) * (turn >= 92 ? 280 : 130);
+        if (oppPostLegal <= 3) score += (4 - oppPostLegal) * (turn >= 92 ? 240 : 110);
+      }
+
+      if (countType(src, "blue-reserved") > 0 && turn < 5) {
+        const b3 = src[2] || [];
+        const flexibility = b3.filter(cell => cell === null || cell === "blue-reserved").length;
+        score += flexibility * 1.0;
+      }
+
+      boardEvalCache.set(cacheKey, score);
+      return score;
+    };
+
+    const evaluateOutcome = (outcome, perspective, turn) => {
+      if (outcome.terminal) {
+        if (outcome.terminal.winner === "draw") {
+          const opponent = otherOf(perspective);
+          return ((outcome.scores[perspective] || 0) - (outcome.scores[opponent] || 0)) * 1000;
+        }
+        const margin = (outcome.scores[perspective] || 0) - (outcome.scores[otherOf(perspective)] || 0);
+        return outcome.terminal.winner === perspective
+          ? WIN_VALUE + margin * 1000
+          : -WIN_VALUE + margin * 1000;
+      }
+      return evaluateBoard(outcome.board, perspective, outcome.scores, outcome.gasActive, turn);
+    };
+
+    const actionTieBreak = action => {
+      if (!action) return -10;
+      if (action.pass) return 0;
+      const centerBias = action.b === 4 ? 0.35 : 0;
+      const dirBias = action.dir === "up" ? 0.04 : action.dir === "left" ? 0.03 : action.dir === "down" ? 0.02 : 0.01;
+      return centerBias + dirBias - action.b * 0.0001;
+    };
+
+    const inverseDir = dir => ({ up: "down", down: "up", left: "right", right: "left" }[dir]);
+
+    const slideHabitPenalty = (outcome, action, player, turn) => {
+      if (!action || action.pass || player !== me || turn !== turnNumber) return 0;
+
+      const history = engine._recentSlides || [];
+      let penalty = 0;
+      if (history.length) {
+        const last = history[history.length - 1];
+        if (last.b === action.b && inverseDir(last.dir) === action.dir) penalty += 82;
+        else if (last.b === action.b && last.dir === action.dir) penalty += 34;
+
+        const sameBlock = history.slice(-5).filter(x => x.b === action.b).length;
+        if (sameBlock >= 2) penalty += (sameBlock - 1) * 24;
+      }
+
+      const key = outcome && outcome.board ? boardKey(outcome.board) : "";
+      if (key) {
+        const hits = (engine._recentBoards || []).filter(oldKey => oldKey === key).length;
+        penalty += hits * 74;
+      }
+
+      // Tactical slides are allowed to break the habit rule. Sterile shuttling is not.
+      const capturedEnemy = outcome && outcome.captured
+        ? (outcome.captured[otherOf(player)] || 0) + (outcome.captured.blue || 0)
+        : 0;
+      const capturedSelf = outcome && outcome.captured
+        ? (outcome.captured[player] || 0)
+        : 0;
+      if (outcome && outcome.terminal) penalty *= 0.08;
+      else if (capturedEnemy >= 2 || capturedSelf >= 2) penalty *= 0.24;
+
+      const pointGap = (outcome && outcome.scores
+        ? (outcome.scores[player] || 0) - (outcome.scores[otherOf(player)] || 0)
+        : 0);
+      if (pointGap <= -8) penalty *= 0.62;
+      else if (pointGap >= 8 && turn >= 72) penalty *= 1.20;
+
+      return penalty;
+    };
+
+    const collectTurnEndOutcomes = (placementResult, player, turn, slideLocks) => {
+      if (placementResult.turnEnded) {
+        return [makeOutcome({
+          board: placementResult.board,
+          outScores: placementResult.scores,
+          gasActive: placementResult.gasActive,
+          gasLosses: placementResult.gasLosses,
+          captured: placementResult.captured,
+          terminal: placementResult.terminal,
+          action: null,
+          placementBoard: placementResult.placementBoard
+        })];
+      }
+
+      const outcomes = [simulatePass(
+        placementResult.board,
+        player,
+        placementResult.scores,
+        placementResult.gasActive,
+        turn
+      )];
+
+      for (let b = 0; b < 9; b++) {
+        if (slideLocks.has(b)) continue;
+        for (const dir of DIRS) {
+          const outcome = simulateSlide(
+            placementResult.board,
+            player,
+            b,
+            dir,
+            placementResult.scores,
+            placementResult.gasActive,
+            turn
+          );
+          if (!outcome.legal && outcome.legal !== undefined) continue;
+          outcomes.push(outcome);
+        }
+      }
+      return outcomes;
+    };
+
+    const rankTurnEnds = (placementResult, player, turn, slideLocks) => {
+      const ranked = collectTurnEndOutcomes(placementResult, player, turn, slideLocks)
+        .map(outcome => ({
+          outcome,
+          decisionValue: evaluateOutcome(outcome, player, turn)
+            + actionTieBreak(outcome.action)
+            - slideHabitPenalty(outcome, outcome.action, player, turn)
+        }));
+      ranked.sort((a, b) =>
+        b.decisionValue - a.decisionValue ||
+        actionTieBreak(b.outcome.action) - actionTieBreak(a.outcome.action)
+      );
+      return ranked;
+    };
+
+    const chooseBestTurnEnd = (placementResult, player, turn, slideLocks) => {
+      const ranked = rankTurnEnds(placementResult, player, turn, slideLocks);
+      return ranked[0].outcome;
+    };
+
+    const bestSlideFromCurrent = (src, player, baseScores, gasActiveBefore, turn, slideLocks) => {
+      const placementStub = {
+        turnEnded: false,
+        board: src,
+        scores: copyScores(baseScores),
+        gasActive: gasActiveBefore,
+        captured: { white: 0, black: 0, blue: 0 },
+        placementBoard: src
+      };
+      return chooseBestTurnEnd(placementStub, player, turn, slideLocks);
+    };
+
+    const quickPlacementValue = (placementResult, player, turn) => {
+      const opponent = otherOf(player);
+      let value = evaluateBoard(
+        placementResult.board,
+        player,
+        placementResult.scores,
+        placementResult.gasActive,
+        turn
+      );
+      value += (placementResult.captured[opponent] || 0) * 126;
+      value += (placementResult.captured.blue || 0) * BLUE_VALUE * 126;
+      value -= (placementResult.captured[player] || 0) * 158;
+      value -= (placementResult.gasLosses[player] || 0) * 75;
+      value += (placementResult.gasLosses[opponent] || 0) * 48;
+      if (placementResult.terminal) value = evaluateOutcome(makeOutcome({
+        board: placementResult.board,
+        outScores: placementResult.scores,
+        gasActive: placementResult.gasActive,
+        gasLosses: placementResult.gasLosses,
+        captured: placementResult.captured,
+        terminal: placementResult.terminal
+      }), player, turn);
+      return value;
+    };
+
+    const enumerateFullTurnCandidates = (
+      src,
+      player,
+      baseScores,
+      gasActiveBefore,
+      turn,
+      slideLocks,
+      koForbiddenKey = null
+    ) => {
+      const candidates = [];
+      const urgent = collectUrgentCells(src, player);
+      const empties = countEmpty(src);
+      const variantsPerPlacement = empties <= 18 ? 3 : empties <= 38 ? 2 : 1;
+
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (src[b][c] !== null) continue;
+          const placement = simulatePlacement(
+            src,
+            player,
+            b,
+            c,
+            baseScores,
+            gasActiveBefore,
+            turn,
+            koForbiddenKey
+          );
+          if (!placement.legal) continue;
+          const rankedEnds = rankTurnEnds(placement, player, turn, slideLocks);
+          const keep = Math.min(variantsPerPlacement, rankedEnds.length);
+          for (let rank = 0; rank < keep; rank++) {
+            const item = rankedEnds[rank];
+            const action = item.outcome.action;
+            const actionKey = !action
+              ? "capture-end"
+              : action.pass
+                ? "pass"
+                : `${action.b}:${action.dir}`;
+            candidates.push({
+              b,
+              c,
+              placement,
+              outcome: item.outcome,
+              value: item.decisionValue,
+              turnEndRank: rank,
+              variantKey: `${b},${c}|${actionKey}`,
+              urgent: urgent.has(b + "," + c)
+            });
+          }
+        }
+      }
+
+      candidates.sort((a, b) =>
+        b.value - a.value ||
+        Number(b.urgent) - Number(a.urgent) ||
+        a.turnEndRank - b.turnEndRank ||
+        a.b - b.b ||
+        a.c - b.c
+      );
+      return candidates;
+    };
+
+    const selectBeamWithUrgency = (items, limit, maxExtra = 4) => {
+      const chosen = [];
+      const used = new Set();
+      const add = item => {
+        const key = item.variantKey || (item.b + "," + item.c);
+        if (used.has(key)) return;
+        used.add(key);
+        chosen.push(item);
+      };
+
+      for (const item of items.slice(0, Math.min(limit, items.length))) add(item);
+      for (const item of items) {
+        if (item.urgent) add(item);
+        if (chosen.length >= Math.min(items.length, limit + maxExtra)) break;
+      }
+      return chosen;
+    };
+
+    const selectRootVariants = (items, placementLimit, variantExtra = 4) => {
+      const chosen = [];
+      const chosenVariants = new Set();
+      const chosenPlacements = new Set();
+
+      for (const item of items) {
+        const placementKey = item.b + "," + item.c;
+        if (chosenPlacements.has(placementKey)) continue;
+        chosenPlacements.add(placementKey);
+        chosenVariants.add(item.variantKey || placementKey);
+        chosen.push(item);
+        if (chosen.length >= placementLimit) break;
+      }
+
+      const target = Math.min(items.length, placementLimit + variantExtra);
+      for (const item of items) {
+        const variantKey = item.variantKey || (item.b + "," + item.c);
+        if (chosenVariants.has(variantKey)) continue;
+        // Alternative slides from a strong placement are allowed into the root beam.
+        // This is the central fix for the old greedy placement-to-one-slide collapse.
+        chosenVariants.add(variantKey);
+        chosen.push(item);
+        if (chosen.length >= target) break;
+      }
+      return chosen;
+    };
+
+    const chooseBestFullTurnLimited = (
+      src,
+      player,
+      baseScores,
+      gasActiveBefore,
+      turn,
+      beam = 5
+    ) => {
+      const preparedBoard = applyBlueDropIfDue(src, turn);
+      const prelim = [];
+      const urgent = collectUrgentCells(preparedBoard, player);
+
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (preparedBoard[b][c] !== null) continue;
+          const placement = simulatePlacement(
+            preparedBoard,
+            player,
+            b,
+            c,
+            baseScores,
+            gasActiveBefore,
+            turn
+          );
+          if (!placement.legal) continue;
+          prelim.push({
+            b,
+            c,
+            placement,
+            quick: quickPlacementValue(placement, player, turn),
+            urgent: urgent.has(b + "," + c)
+          });
+        }
+      }
+
+      if (!prelim.length) {
+        const outcome = makeOutcome({
+          board: preparedBoard,
+          outScores: copyScores(baseScores),
+          gasActive: gasActiveBefore,
+          terminal: terminalFromNoLegal(baseScores),
+          action: null
+        });
+        return { outcome, value: evaluateOutcome(outcome, player, turn) };
+      }
+
+      prelim.sort((a, b) =>
+        b.quick - a.quick ||
+        Number(b.urgent) - Number(a.urgent) ||
+        a.b - b.b ||
+        a.c - b.c
+      );
+      const shortlist = selectBeamWithUrgency(prelim, beam, 2);
+      let best = null;
+      let bestValue = -Infinity;
+
+      for (const item of shortlist) {
+        const outcome = chooseBestTurnEnd(item.placement, player, turn, new Set());
+        const value = evaluateOutcome(outcome, player, turn);
+        if (value > bestValue) {
+          bestValue = value;
+          best = { outcome, value, b: item.b, c: item.c };
+        }
+      }
+      return best;
+    };
+
+    const chooseWorstOpponentReply = (
+      src,
+      rootPlayer,
+      baseScores,
+      gasActiveBefore,
+      turn,
+      koForbiddenKey = null
+    ) => {
+      const opponent = otherOf(rootPlayer);
+      const preparedBoard = applyBlueDropIfDue(src, turn);
+      const prelim = [];
+      const urgent = collectUrgentCells(preparedBoard, opponent);
+
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (preparedBoard[b][c] !== null) continue;
+          const placement = simulatePlacement(
+            preparedBoard,
+            opponent,
+            b,
+            c,
+            baseScores,
+            gasActiveBefore,
+            turn,
+            koForbiddenKey
+          );
+          if (!placement.legal) continue;
+          prelim.push({
+            b,
+            c,
+            placement,
+            quick: quickPlacementValue(placement, opponent, turn),
+            urgent: urgent.has(b + "," + c)
+          });
+        }
+      }
+
+      if (!prelim.length) {
+        const outcome = makeOutcome({
+          board: preparedBoard,
+          outScores: copyScores(baseScores),
+          gasActive: gasActiveBefore,
+          terminal: terminalFromNoLegal(baseScores),
+          action: null
+        });
+        return {
+          outcome,
+          rootValue: evaluateOutcome(outcome, rootPlayer, turn),
+          alternatives: [outcome]
+        };
+      }
+
+      prelim.sort((a, b) =>
+        b.quick - a.quick ||
+        Number(b.urgent) - Number(a.urgent) ||
+        a.b - b.b ||
+        a.c - b.c
+      );
+
+      const empties = countEmpty(preparedBoard);
+      const replyCount = empties <= 22 ? 14 : empties <= 45 ? 10 : 7;
+      const shortlist = selectBeamWithUrgency(prelim, replyCount, 4);
+      const replyOptions = [];
+
+      for (const item of shortlist) {
+        // Evaluate every legal slide/pass from the root player's perspective.
+        // The former engine first chose the opponent's locally favourite slide,
+        // which could hide a different slide that was more destructive to us.
+        const endings = collectTurnEndOutcomes(item.placement, opponent, turn, new Set());
+        for (const outcome of endings) {
+          replyOptions.push({
+            outcome,
+            rootValue: evaluateOutcome(outcome, rootPlayer, turn),
+            b: item.b,
+            c: item.c
+          });
+        }
+      }
+
+      replyOptions.sort((a, b) => a.rootValue - b.rootValue || a.b - b.b || a.c - b.c);
+      const worst = replyOptions[0];
+      const alternatives = [];
+      const seenBoards = new Set();
+      for (const option of replyOptions) {
+        const key = boardKey(option.outcome.board);
+        if (seenBoards.has(key)) continue;
+        seenBoards.add(key);
+        alternatives.push(option.outcome);
+        if (alternatives.length >= 6) break;
+      }
+
+      return {
+        outcome: worst.outcome,
+        rootValue: worst.rootValue,
+        alternatives
+      };
+    };
+
+    const redAppearanceOutcome = (src, owner, b, c, baseScores, gasActiveBefore, turn) => {
+      if (!src[b] || (src[b][c] !== null && src[b][c] !== "blue-reserved")) return null;
+      const next = cloneBoard(src);
+      next[b][c] = "red";
+      const captures = resolveSlideCaptures(next);
+      const opponent = otherOf(owner);
+      const delta = { white: 0, black: 0 };
+      delta[owner] = (captures.captured[opponent] || 0) + (captures.captured.blue || 0) * BLUE_VALUE;
+      delta[opponent] = captures.captured[owner] || 0;
+      const projectedScores = addScoreDelta(baseScores, delta);
+      let terminal = terminalFromCapture(captures.captured, projectedScores);
+      if (!terminal && turn <= TURN_LIMIT && !hasLegalPlacement(captures.board, owner)) {
+        terminal = terminalFromNoLegal(projectedScores);
+      }
+      return makeOutcome({
+        board: captures.board,
+        outScores: projectedScores,
+        gasActive: gasActiveBefore,
+        captured: captures.captured,
+        terminal,
+        action: { red: true, b, c }
+      });
+    };
+
+    const chooseRedDeclaration = (
+      normalBest,
+      src,
+      player,
+      baseScores,
+      gasActiveBefore,
+      turn,
+      wallsLeft
+    ) => {
+      const sourceEmpties = countEmpty(src);
+      if (wallsLeft <= 0 || turn < 40 || turn >= 124 || sourceEmpties > 48) return null;
+
+      // A declaration consumes the placement but still receives a slide now.
+      const declarationTurn = bestSlideFromCurrent(
+        src,
+        player,
+        baseScores,
+        gasActiveBefore,
+        turn,
+        lockedBlocks
+      );
+      if (declarationTurn.terminal) return null;
+
+      // The coordinate is secret, so predict the opponent's strongest natural reply
+      // without giving it the reserved target.
+      const reply = chooseWorstOpponentReply(
+        declarationTurn.board,
+        player,
+        declarationTurn.scores,
+        declarationTurn.gasActive,
+        turn + 1
+      );
+      if (!reply || !reply.outcome || reply.outcome.terminal) return null;
+
+      const arrival = reply.outcome;
+      const plausibleArrivals = reply.alternatives && reply.alternatives.length
+        ? reply.alternatives
+        : [arrival];
+      const opponent = otherOf(player);
+      const arrivalValue = evaluateOutcome(arrival, player, turn + 1);
+      const mobilityRelevant = countEmpty(arrival.board) <= 22;
+      const beforeOppLegal = mobilityRelevant
+        ? countLegalPlacements(arrival.board, opponent)
+        : 0;
+      const quickWalls = [];
+
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          // The coordinate must be empty both when declared and after the current slide,
+          // and must survive the opponent's intervening turn.
+          if (src[b][c] !== null) continue;
+          if (!declarationTurn.board[b] || declarationTurn.board[b][c] !== null) continue;
+          if (!arrival.board[b] || (arrival.board[b][c] !== null && arrival.board[b][c] !== "blue-reserved")) continue;
+
+          const survivingArrivals = plausibleArrivals.filter(option =>
+            option.board[b] && (option.board[b][c] === null || option.board[b][c] === "blue-reserved")
+          );
+          const survivalRatio = survivingArrivals.length / plausibleArrivals.length;
+          if (survivalRatio < 0.80) continue;
+
+          const wall = redAppearanceOutcome(
+            arrival.board,
+            player,
+            b,
+            c,
+            arrival.scores,
+            arrival.gasActive,
+            turn + 2
+          );
+          if (!wall) continue;
+
+          wall.board = applyBlueDropIfDue(wall.board, turn + 2);
+          if (!wall.terminal && !hasLegalPlacement(wall.board, player)) {
+            wall.terminal = terminalFromNoLegal(wall.scores);
+          }
+
+          const capturedOpponent = wall.captured[opponent] || 0;
+          const capturedSelf = wall.captured[player] || 0;
+          const afterOppLegal = mobilityRelevant
+            ? countLegalPlacements(wall.board, opponent)
+            : beforeOppLegal;
+          const mobilityGain = Math.max(0, beforeOppLegal - afterOppLegal);
+          const wallBaseValue = evaluateOutcome(wall, player, turn + 2);
+          const terminalWin = wall.terminal && wall.terminal.winner === player;
+
+          let quick = wallBaseValue;
+          quick += capturedOpponent * 38;
+          quick -= capturedSelf * 64;
+          quick += mobilityGain * (turn >= 88 ? 30 : 18);
+          quick -= (1 - survivalRatio) * 260;
+
+          const tacticalImpact =
+            capturedOpponent >= 2 ||
+            mobilityGain >= 3 ||
+            wallBaseValue >= arrivalValue + 100 ||
+            terminalWin;
+
+          if (!tacticalImpact) continue;
+          if (capturedSelf > capturedOpponent + 1 && !terminalWin) continue;
+
+          quickWalls.push({
+            b,
+            c,
+            wall,
+            quick,
+            wallBaseValue,
+            terminalWin,
+            capturedOpponent,
+            capturedSelf,
+            mobilityGain,
+            survivalRatio
+          });
+        }
+      }
+
+      if (!quickWalls.length) return null;
+      quickWalls.sort((a, b) => b.quick - a.quick || a.b - b.b || a.c - b.c);
+
+      let best = null;
+      let bestValue = -Infinity;
+      const shortlist = quickWalls.slice(0, Math.min(4, quickWalls.length));
+
+      for (let i = 0; i < shortlist.length; i++) {
+        const candidate = shortlist[i];
+        let returnValue = candidate.wallBaseValue;
+
+        // Search the return turn only for the two strongest walls. This keeps Red
+        // planning responsive on iPhone while still checking the critical line.
+        if (i < 2 && !candidate.wall.terminal && turn + 2 <= TURN_LIMIT) {
+          const ourReturn = chooseBestFullTurnLimited(
+            candidate.wall.board,
+            player,
+            candidate.wall.scores,
+            candidate.wall.gasActive,
+            turn + 2,
+            countEmpty(candidate.wall.board) <= 22 ? 5 : 3
+          );
+          if (ourReturn) returnValue = ourReturn.value;
+        }
+
+        const value = candidate.wall.terminal
+          ? candidate.wallBaseValue
+          : candidate.wallBaseValue * 0.70 + returnValue * 0.30;
+
+        if (value > bestValue) {
+          bestValue = value;
+          best = {
+            b: candidate.b,
+            c: candidate.c,
+            value,
+            terminalWin: candidate.terminalWin,
+            capturedOpponent: candidate.capturedOpponent,
+            capturedSelf: candidate.capturedSelf,
+            mobilityGain: candidate.mobilityGain,
+            survivalRatio: candidate.survivalRatio,
+            plannedSlide: declarationTurn.action || { pass: true },
+            declarationEndBoardKey: boardKey(declarationTurn.board)
+          };
+        }
+      }
+
+      if (!best) return null;
+
+      const normalValue = normalBest
+        ? (Number.isFinite(normalBest.searchedValue) ? normalBest.searchedValue : normalBest.value)
+        : -Infinity;
+      const cooldownActive = turn - (engine._lastRedTurn || -99) < 10;
+
+      let requiredGain = turn < 56 ? 125 : turn < 88 ? 72 : 40;
+      if (wallsLeft === 5 && turn < 60) requiredGain += 32;
+      if (wallsLeft <= 2) requiredGain += 18;
+      if (cooldownActive) requiredGain += 100;
+
+      if (best.terminalWin) return best;
+      if (cooldownActive && best.capturedOpponent < 4 && best.mobilityGain < 5) return null;
+      return best.value >= normalValue + requiredGain ? best : null;
+    };
+
+    if (phase === "setup") {
+      let best = null;
+      let bestScore = -Infinity;
+      for (const b of CORNER_BLOCKS) {
+        if (board[b].some(cell => cell === me)) continue;
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] !== null) continue;
+          let value = 0;
+          if (c === 4) value += 9;
+          if ([0, 2, 6, 8].includes(c)) value += 4;
+          if ([1, 3, 5, 7].includes(c)) value += 2;
+          if (board[b].some(cell => cell === enemy)) value -= 1.5;
+          value -= b * 0.001 + c * 0.0001;
+          if (value > bestScore) {
+            bestScore = value;
+            best = { b, c };
+          }
+        }
+      }
+      engine._plan = null;
+      return { place: best || { b: 0, c: 0 } };
+    }
+
+    if (phase === "slide") {
+      if (
+        engine._plan &&
+        engine._plan.turn === turnNumber &&
+        engine._plan.player === me &&
+        engine._plan.expectedBoardKey === boardKey(board)
+      ) {
+        const planned = engine._plan.slide;
+        engine._plan = null;
+        if (planned && planned.pass === true) {
+          return { place: null, slide: { pass: true } };
+        }
+        if (planned && Number.isInteger(planned.b) && DIRS.includes(planned.dir) && !lockedBlocks.has(planned.b)) {
+          engine._recentSlides.push({ b: planned.b, dir: planned.dir });
+          if (engine._recentSlides.length > 6) engine._recentSlides.shift();
+          return { place: null, slide: { b: planned.b, dir: planned.dir } };
+        }
+      }
+
+      engine._plan = null;
+      const best = bestSlideFromCurrent(board, me, scores, gasPhaseActive, turnNumber, lockedBlocks);
+      const chosen = best.action || { pass: true };
+      if (best && best.board) engine._previousOwnEndKey = boardKey(best.board);
+      if (!chosen.pass && Number.isInteger(chosen.b) && DIRS.includes(chosen.dir)) {
+        engine._recentSlides.push({ b: chosen.b, dir: chosen.dir });
+        if (engine._recentSlides.length > 6) engine._recentSlides.shift();
+      }
+      return { place: null, slide: chosen };
+    }
+
+    if (phase === "place") {
+      const currentKey = boardKey(board);
+      if (!engine._recentBoards.length || engine._recentBoards[engine._recentBoards.length - 1] !== currentKey) {
+        engine._recentBoards.push(currentKey);
+        if (engine._recentBoards.length > 8) engine._recentBoards.shift();
+      }
+
+      const candidates = enumerateFullTurnCandidates(
+        board,
+        me,
+        scores,
+        gasPhaseActive,
+        turnNumber,
+        lockedBlocks,
+        engine._previousOwnEndKey
+      );
+
+      if (!candidates.length) {
+        engine._plan = null;
+        return { place: { b: 0, c: 0, secretRed: false }, slide: null };
+      }
+
+      const empties = countEmpty(board);
+      const rootCount = empties <= 20 ? 11 : empties <= 45 ? 8 : 6;
+      const roots = selectRootVariants(candidates, rootCount, 4);
+
+      for (const candidate of roots) {
+        if (candidate.outcome.terminal) {
+          candidate.searchedValue = candidate.value;
+          candidate.reply = null;
+          continue;
+        }
+
+        const nextTurn = turnNumber + 1;
+        const reply = chooseWorstOpponentReply(
+          candidate.outcome.board,
+          me,
+          candidate.outcome.scores,
+          candidate.outcome.gasActive,
+          nextTurn,
+          currentKey
+        );
+        const replyValue = reply.rootValue;
+        const immediateValue = candidate.value;
+        const caution = empties <= 20 ? 0.92 : empties <= 40 ? 0.82 : 0.72;
+        candidate.searchedValue = immediateValue * (1 - caution) + replyValue * caution;
+        candidate.reply = reply;
+      }
+
+      const rootSet = new Set(roots);
+      for (const candidate of candidates) {
+        if (!rootSet.has(candidate)) candidate.searchedValue = candidate.value - 235;
+      }
+
+      // Near the end, look one selective turn farther on the leading roots. The
+      // small blend improves horizon stability without restoring v8's heavy search.
+      if (empties <= 20 || turnNumber >= 100) {
+        const counterRoots = roots
+          .filter(item => item.reply && item.reply.outcome && !item.reply.outcome.terminal)
+          .sort((a, b) => b.searchedValue - a.searchedValue)
+          .slice(0, 3);
+
+        for (const candidate of counterRoots) {
+          const replyOutcome = candidate.reply.outcome;
+          const counter = chooseBestFullTurnLimited(
+            replyOutcome.board,
+            me,
+            replyOutcome.scores,
+            replyOutcome.gasActive,
+            turnNumber + 2,
+            empties <= 15 ? 5 : 4
+          );
+          if (counter) {
+            candidate.searchedValue = candidate.searchedValue * 0.66 + counter.value * 0.34;
+          }
+        }
+      }
+
+      candidates.sort((a, b) =>
+        b.searchedValue - a.searchedValue ||
+        b.value - a.value ||
+        Number(b.urgent) - Number(a.urgent) ||
+        a.b - b.b ||
+        a.c - b.c
+      );
+
+      const bestNormal = candidates[0];
+      const redChoice = chooseRedDeclaration(
+        bestNormal,
+        board,
+        me,
+        scores,
+        gasPhaseActive,
+        turnNumber,
+        redWallsLeft
+      );
+
+      if (redChoice) {
+        engine._lastRedTurn = turnNumber;
+        engine._previousOwnEndKey = redChoice.declarationEndBoardKey || boardKey(board);
+        engine._plan = {
+          turn: turnNumber,
+          player: me,
+          expectedBoardKey: boardKey(board),
+          slide: redChoice.plannedSlide || { pass: true },
+          redTarget: { b: redChoice.b, c: redChoice.c }
+        };
+        return {
+          place: { b: redChoice.b, c: redChoice.c, secretRed: true },
+          slide: null
+        };
+      }
+
+      const plannedSlide = bestNormal.outcome.action;
+      engine._previousOwnEndKey = boardKey(bestNormal.outcome.board);
+      if (!bestNormal.placement.turnEnded && plannedSlide) {
+        engine._plan = {
+          turn: turnNumber,
+          player: me,
+          expectedBoardKey: boardKey(bestNormal.placement.board),
+          slide: plannedSlide
+        };
+      } else {
+        engine._plan = null;
+      }
+
+      return {
+        place: { b: bestNormal.b, c: bestNormal.c, secretRed: false },
+        slide: null
+      };
+    }
+
+    engine._plan = null;
+    return { place: null, slide: { pass: true } };
+  }
+};
