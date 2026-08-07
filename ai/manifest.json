@@ -75,6 +75,42 @@
           "latest": true,
           "type": "ntai",
           "file": "ai/models/Grok/Grok_Alpha_2.7.2_v1.ntai"
+        },
+        {
+          "id": "grok-beta-2.7.2-v1",
+          "name": "Grok Beta",
+          "version": "2.7.2 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Grok/Grok_Beta_2.7.2_v1.ntai"
+        }
+      ]
+    },
+    {
+      "id": "microsoft",
+      "label": "Microsoft",
+      "models": [
+        {
+          "id": "copilot-alpha-2.7.2-v1",
+          "name": "Copilot Alpha",
+          "version": "2.7.2 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Copilot/copilot_alpha_2.7.2_v1.ntai"
+        }
+      ]
+    },
+    {
+      "id": "mistral",
+      "label": "Mistral AI",
+      "models": [
+        {
+          "id": "mistral-alpha-2.7.2-v3",
+          "name": "Mistral Alpha",
+          "version": "2.7.2 / v3",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Mistral/Mistral_Alpha_2.7.2_v3.ntai"
         }
       ]
     }
