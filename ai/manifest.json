@@ -19,12 +19,34 @@
       "label": "OpenAI",
       "models": [
         {
-          "id": "gpt-alpha-latest-v2",
-          "name": "GPT Alpha Latest",
-          "version": "v2",
+          "id": "gpt-alpha-2.7.2-v2",
+          "name": "GPT Alpha",
+          "version": "2.7.2 / v2",
           "latest": true,
           "type": "ntai",
-          "file": "ai/models/GPT_Alpha_Latest_v2.ntai"
+          "file": "ai/models/GPT/GPT_Alpha_2.7.2_v2.ntai"
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "models": [
+        {
+          "id": "claude-topologist-2.7.2-v1",
+          "name": "Claude Topologist",
+          "version": "2.7.2 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-topologist_2.7.2_v1.ntai"
+        },
+        {
+          "id": "claude-sonnet-steadfast-2.7.2-v4",
+          "name": "Claude Sonnet Steadfast",
+          "version": "2.7.2 / v4",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-Sonnet_Steadfast_2.7.2_v4.ntai"
         }
       ]
     }
