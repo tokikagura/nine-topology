@@ -13,6 +13,20 @@
           "type": "builtin"
         }
       ]
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "models": [
+        {
+          "id": "gpt-alpha-latest-v2",
+          "name": "GPT Alpha Latest",
+          "version": "v2",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/GPT_Alpha_Latest_v2.ntai"
+        }
+      ]
     }
   ]
 }
