@@ -1,3 +1,7 @@
+/* Nine Topology v2.9 baseline built-in BOT.
+   Based on the existing v2.8-era test BOT, with only rule-awareness updates.
+   Intentionally remains shallow/random so it can serve as a baseline opponent. */
+
   function getActiveExternalEngine() {
     const sideEngine = currentPlayer === 'white'
       ? window.NTAI_Engine_White
@@ -5,22 +9,70 @@
     return sideEngine || window.NTAI_Engine || null;
   }
 
+  // === v2.9 baseline BOT helpers ===
+  // 強化ではなく、Turn99 Blue / Turn104 Gas / Rain の新ルールに
+  // 旧BOTの判断基準を合わせるための最小限の参照関数。
+  function getV29BlueTurn() {
+    return (typeof V290_BLUE_TURN === 'number') ? V290_BLUE_TURN : 99;
+  }
+
+  function getV29GasTurn() {
+    return (typeof V290_GAS_TURN === 'number') ? V290_GAS_TURN : 104;
+  }
+
+  function isV29RainActive() {
+    return (typeof v290RainActivated !== 'undefined') && v290RainActivated === true;
+  }
+
+  function isV29BlueDropped() {
+    return (typeof v290BlueDropped !== 'undefined')
+      ? v290BlueDropped === true
+      : turnNumber >= getV29BlueTurn();
+  }
+
+  function getV29BlueCandidateBlocks() {
+    if (typeof V290_BLUE_CANDIDATES !== 'undefined' && Array.isArray(V290_BLUE_CANDIDATES)) {
+      return V290_BLUE_CANDIDATES.map(item => item.block);
+    }
+    return [1, 3, 5, 7]; // B2 / B4 / B6 / B8
+  }
+
   function getExternalMove(engine) {
     if (!engine || typeof engine.decideNextMove !== 'function') return null;
     try {
+      // rules.js 側でもv2.9用に上書きされるが、ai.js単体の内容も
+      // 旧v2.8 APIを残さないようv2.9項目に合わせておく。
+      const blueCandidates = (typeof V290_BLUE_CANDIDATES !== 'undefined')
+        ? V290_BLUE_CANDIDATES.map(c => ({
+            id: c.id,
+            block: c.block,
+            cell: c.cell,
+            emptyInBlock: (typeof v290CountEmptyInBlock === 'function') ? v290CountEmptyInBlock(c.block) : null,
+            redInBlock: (typeof v290CountRedInBlock === 'function') ? v290CountRedInBlock(c.block) : null
+          }))
+        : [];
+
       const gameState = {
         player: currentPlayer,
         phase: gamePhase,
         redWallsLeft: wallCount[currentPlayer],
         scores: { ...playerScores },
         turnNumber,
+        maxTurns: MAX_TURNS,
+        remainingTurns: MAX_TURNS - turnNumber + 1,
         emptyCount,
         gasPhaseActive,
-        blueProtectionRemaining: { ...blueProtectionRemaining },
+        gasStartTurn: getV29GasTurn(),
+        blueDropTurn: getV29BlueTurn(),
+        blueDropped: isV29BlueDropped(),
+        blueSecuredOwner: (typeof v290BlueSecuredOwner !== 'undefined') ? v290BlueSecuredOwner : null,
         blueStonesSecured: { ...blueStonesSecured },
-        blueDropState: { ...blueDropState },
-        blueDropSchedule: BLUE_DROP_EVENTS.map(event => ({ ...event })),
-        gasProtectedBoard: gasProtectedBoard.map(block => [...block]),
+        blueCandidateBlocks: blueCandidates,
+        rainRightOwner: (typeof v290RainRightOwner !== 'undefined') ? v290RainRightOwner : null,
+        rainRightAvailable: (typeof v290CanCallRain === 'function') ? v290CanCallRain() : false,
+        rainDeclared: (typeof v290RainDeclared !== 'undefined') ? v290RainDeclared : false,
+        rainPending: (typeof v290RainPending !== 'undefined') ? v290RainPending : false,
+        rainActivated: isV29RainActive(),
         slideLockedBlocks: [...slideLockedBlocks]
       };
       return engine.decideNextMove(board.map(block => [...block]), gameState);
@@ -74,9 +126,10 @@
     const col = (b % 3) * 3 + (c % 3);
     const placedStoneDies = targets.some(target => target.r === r && target.c === col);
 
-    // 青石の残存保護枠を差し引いた「実被害」で評価する。
-    const effectiveOwnLoss = Math.max(0, ownLoss - blueProtectionRemaining[playerColor]);
-    const effectiveOpponentLoss = Math.max(0, opponentLoss - blueProtectionRemaining[opponent]);
+    // v2.9ではBlue確保はガス保護枠ではなくRain Right。
+    // BOTの強さは上げず、旧保護枠だけを評価から外す。
+    const effectiveOwnLoss = ownLoss;
+    const effectiveOpponentLoss = opponentLoss;
     let score = effectiveOpponentLoss * 7 - effectiveOwnLoss * 12;
     if (placedStoneDies) score -= 30;
 
@@ -86,13 +139,23 @@
   }
 
   function chooseBuiltInPlacement(validTargets) {
-    // 赤石申告は石を置かないため、従来どおり合法候補から選ぶ。
+    // 赤石は引き続き簡易BOTらしくランダム主体。
+    // Turn99前だけ、Blue候補ブロックを少し意識する程度に留める。
     if (isWallDeclarationActive) {
+      if (!isV29BlueDropped() && turnNumber < getV29BlueTurn() && Math.random() < 0.55) {
+        const blueBlocks = new Set(getV29BlueCandidateBlocks());
+        const blueAreaTargets = validTargets.filter(pos => blueBlocks.has(pos.b));
+        if (blueAreaTargets.length > 0) {
+          return blueAreaTargets[Math.floor(Math.random() * blueAreaTargets.length)];
+        }
+      }
       return validTargets[Math.floor(Math.random() * validTargets.length)];
     }
 
-    // 現在ガス中、またはこの配置で空き10へ入る局面では専用評価へ切り替える。
-    const gasRelevant = gasPhaseActive || emptyCount <= 11;
+    // v2.9のGasはEmpty数ではなくTurn104固定。Rain発動後はGas評価を止める。
+    // Gas直前の1ターンだけ軽く準備し、深読みはしない。
+    const gasTurn = getV29GasTurn();
+    const gasRelevant = !isV29RainActive() && (gasPhaseActive || turnNumber === gasTurn - 1);
     if (gasRelevant) {
       const evaluated = validTargets.map(pos => ({
         ...pos,
@@ -101,11 +164,11 @@
       const bestScore = Math.max(...evaluated.map(item => item.score));
       const best = evaluated.filter(item => item.score === bestScore);
       const choice = best[Math.floor(Math.random() * best.length)];
-      logMessage(`【BOTガス評価】候補${validTargets.length}手 / 最良値${bestScore} / 自軍被害${choice.ownLoss}→${choice.effectiveOwnLoss} / 敵被害${choice.opponentLoss}→${choice.effectiveOpponentLoss}${choice.placedStoneDies ? ' / 配置石も被害' : ''}`);
+      logMessage(`【BOTガス評価】候補${validTargets.length}手 / 最良値${bestScore} / 自軍被害${choice.ownLoss} / 敵被害${choice.opponentLoss}${choice.placedStoneDies ? ' / 配置石も被害' : ''}`);
       return { b: choice.b, c: choice.c };
     }
 
-    // 通常局面では自軍石が7個以上あるブロックへの追加配置を避ける。
+    // 通常局面は旧BOTの簡易方針を維持。
     const saferTargets = validTargets.filter(({ b }) => countOwnStonesInBlock(b, currentPlayer) < 7);
     const pool = saferTargets.length > 0 ? saferTargets : validTargets;
 
@@ -134,7 +197,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.8-test スタート！");
+      logMessage("【BOT対局開始】v2.9-test baseline BOT スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
     externalDuelAutoStarted = false;
@@ -210,8 +273,13 @@
           }
         }
 
-        // 赤石のランダム申告 (15%の確率)
-        if (wallCount[currentPlayer] > 0 && Math.random() < 0.15) {
+        // v2.9対応の軽いRed意識。
+        // 基本はランダムのまま、Blue降臨前だけ少し申告率を上げる。
+        let redChance = 0.12;
+        if (!isV29BlueDropped() && turnNumber >= 80 && turnNumber < getV29BlueTurn()) redChance = 0.20;
+        if (turnNumber >= getV29BlueTurn()) redChance = 0.08;
+
+        if (wallCount[currentPlayer] > 0 && Math.random() < redChance) {
           isWallDeclarationActive = true;
         } else {
           isWallDeclarationActive = false;
@@ -253,8 +321,8 @@
           }
         }
 
-        // ガス局面では、配置時に選んだ安全形をランダムスライドで壊さない。
-        if (gasPhaseActive || emptyCount <= 10) {
+        // v2.9ではGas中だけ安全形を維持。Empty数は開始条件に使わない。
+        if (gasPhaseActive && !isV29RainActive()) {
           logMessage('【BOTガス判断】SLIDE PASS（配置後の安全形を維持）');
           diagnosticContext = 'BOT_GAS_SLIDE_PASS';
           skipSlide();
