@@ -1,0 +1,318 @@
+// ===========================================
+// Mistral_Alpha_v4 for Nine Topology v2.8-test
+// AI API Specification v1.0 Compatible
+// ===========================================
+
+window.NTAI_Engine = {
+  name: "Mistral_Alpha_v4",
+
+  decideNextMove(board, gameState) {
+    const {
+      player,
+      phase,
+      redWallsLeft,
+      scores,
+      turnNumber,
+      emptyCount,
+      gasPhaseActive,
+      blueProtectionRemaining,
+      blueStonesSecured,
+      blueDropState,
+      blueDropSchedule,
+      gasProtectedBoard,
+      slideLockedBlocks
+    } = gameState;
+
+    // 合法手を生成
+    const legalMoves = this.generateLegalMoves(board, gameState);
+
+    if (phase === "setup") {
+      // セットアップフェーズ: 角のブロックに配置
+      return this.getSetupMove(board, player, legalMoves);
+    } else if (phase === "place") {
+      // 通常配置フェーズ
+      return this.getBestPlacementMove(board, gameState, legalMoves);
+    } else if (phase === "slide") {
+      // スライドフェーズ
+      return this.getBestSlideMove(board, gameState, legalMoves);
+    } else if (phase === "gameover") {
+      return null; // ゲーム終了
+    }
+
+    return null; // 合法手なし
+  },
+
+  // 合法手を生成
+  generateLegalMoves(board, gameState) {
+    const { phase, player, slideLockedBlocks } = gameState;
+    const legalMoves = [];
+
+    if (phase === "setup" || phase === "place") {
+      for (let b = 0; b < 9; b++) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] === null) {
+            // 青ストーンの予約セルはスキップ
+            if (board[b][c] === "blue-reserved") continue;
+
+            // セットアップフェーズの制限
+            if (phase === "setup" && !this.isCornerBlock(b)) continue;
+
+            // 自殺手・コウのチェック
+            if (this.isSuicide(board, b, c, player)) continue;
+            if (this.isKo(board, b, c, player, gameState)) continue;
+
+            legalMoves.push({ b, c, secretRed: false });
+          }
+        }
+      }
+    } else if (phase === "slide") {
+      for (let b = 0; b < 9; b++) {
+        if (!slideLockedBlocks.includes(b)) {
+          ["up", "down", "left", "right"].forEach(dir => {
+            legalMoves.push({ slide: { b, dir } });
+          });
+        }
+      }
+      legalMoves.push({ slide: { pass: true } }); // スライドパス
+    }
+
+    return legalMoves;
+  },
+
+  // セットアップフェーズの手を取得
+  getSetupMove(board, player, legalMoves) {
+    const cornerBlocks = [0, 2, 6, 8]; // B1, B3, B7, B9
+    const placedBlocks = new Set();
+
+    // 既に配置されたブロックをチェック
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === player) {
+          placedBlocks.add(b);
+        }
+      }
+    }
+
+    // 空いている角のブロックに配置
+    for (const b of cornerBlocks) {
+      if (!placedBlocks.has(b)) {
+        for (let c = 0; c < 9; c++) {
+          if (board[b][c] === null) {
+            return { place: { b, c } };
+          }
+        }
+      }
+    }
+
+    // 合法手からランダムに選択
+    return legalMoves.length > 0
+      ? legalMoves[Math.floor(Math.random() * legalMoves.length)]
+      : null;
+  },
+
+  // 最善の配置手を取得
+  getBestPlacementMove(board, gameState, legalMoves) {
+    const { player, redWallsLeft, turnNumber, blueDropState, blueDropSchedule } = gameState;
+
+    // 赤石を宣言するかどうか
+    const shouldDeclareRed = this.shouldDeclareRedBarrier(board, gameState);
+
+    // 青ストーンのスポーンターンをチェック
+    const isBlueDropTurn = turnNumber === 12 || turnNumber === 50;
+
+    // 合法手から最善の手を選択
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for (const move of legalMoves) {
+      const score = this.evaluateMove(board, gameState, move);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = move;
+      }
+    }
+
+    // 赤石宣言の優先度を上げる
+    if (shouldDeclareRed && redWallsLeft > 0) {
+      for (const move of legalMoves) {
+        if (move.secretRed) {
+          return move;
+        }
+      }
+    }
+
+    return bestMove || legalMoves[0] || null;
+  },
+
+  // スライド手を取得
+  getBestSlideMove(board, gameState, legalMoves) {
+    const { slideLockedBlocks } = gameState;
+
+    // スライドパスを優先
+    if (legalMoves.some(move => move.slide && move.slide.pass)) {
+      return { slide: { pass: true } };
+    }
+
+    // ランダムにスライド方向を選択
+    const slideMoves = legalMoves.filter(move => move.slide && !move.slide.pass);
+    return slideMoves.length > 0
+      ? slideMoves[Math.floor(Math.random() * slideMoves.length)]
+      : { slide: { pass: true } };
+  },
+
+  // 手の評価
+  evaluateMove(board, gameState, move) {
+    const { player, turnNumber, blueProtectionRemaining } = gameState;
+    let score = 0;
+
+    // 赤石宣言の場合
+    if (move.secretRed) {
+      score += 100; // 赤石宣言を優先
+    }
+
+    // 青ストーンのスポーンターンを考慮
+    if (turnNumber === 11 || turnNumber === 49) {
+      // 青ストーンの近くに配置
+      const bluePositions = this.getBluePositions(board, turnNumber + 1);
+      for (const { b: blueB, c: blueC } of bluePositions) {
+        const distance = Math.abs(move.b - blueB) + Math.abs(move.c - blueC);
+        if (distance <= 2) {
+          score += 50; // 青ストーンの近くに配置
+        }
+      }
+    }
+
+    // 保護対象のストーンを考慮
+    if (blueProtectionRemaining[player] > 0) {
+      score += 10; // 保護を活用できる
+    }
+
+    // 中心に配置することを優先
+    const centerBlocks = [4]; // B5
+    if (centerBlocks.includes(move.b)) {
+      score += 20;
+    }
+
+    return score;
+  },
+
+  // 赤石を宣言するかどうか
+  shouldDeclareRedBarrier(board, gameState) {
+    const { player, redWallsLeft, turnNumber } = gameState;
+
+    // 赤石を宣言できるか
+    if (redWallsLeft <= 0) return false;
+
+    // 早期に宣言
+    if (turnNumber < 20) {
+      return true; // 早期に赤石を宣言
+    }
+
+    return false;
+  },
+
+  // 青ストーンの位置を取得
+  getBluePositions(board, turnNumber) {
+    const bluePositions = [];
+    if (turnNumber >= 12) {
+      bluePositions.push({ b: 8, c: 0 }); // B9-a1
+    }
+    if (turnNumber >= 50) {
+      bluePositions.push({ b: 4, c: 4 }); // B5-b2
+    }
+    bluePositions.push({ b: 0, c: 8 }); // B1-c3
+    return bluePositions;
+  },
+
+  // 角のブロックかどうか
+  isCornerBlock(blockIndex) {
+    return [0, 2, 6, 8].includes(blockIndex); // B1, B3, B7, B9
+  },
+
+  // 自殺手かどうか
+  isSuicide(board, b, c, player) {
+    // 簡易チェック: 置いた後に自分の石が取られないか
+    const tempBoard = JSON.parse(JSON.stringify(board));
+    tempBoard[b][c] = player;
+
+    // 4方向をチェック
+    const directions = [
+      { db: -1, dc: 0 }, { db: 1, dc: 0 }, { db: 0, dc: -1 }, { db: 0, dc: 1 }
+    ];
+    for (const dir of directions) {
+      const nb = b + dir.db;
+      const nc = c + dir.dc;
+      if (nb >= 0 && nb < 9 && nc >= 0 && nc < 9) {
+        if (tempBoard[nb][nc] === player) {
+          // 連結されたグループをチェック
+          const group = this.getConnectedGroup(tempBoard, nb, nc, player);
+          if (group.length === 1) {
+            // 単独の石は取られない
+            return false;
+          }
+          // 囲まれているか
+          if (this.isSurrounded(tempBoard, group, player)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  },
+
+  // 連結されたグループを取得
+  getConnectedGroup(board, b, c, player) {
+    const group = [];
+    const visited = new Set();
+    const stack = [{ b, c }];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const key = `${current.b}-${current.c}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      group.push(current);
+
+      const directions = [
+        { db: -1, dc: 0 }, { db: 1, dc: 0 }, { db: 0, dc: -1 }, { db: 0, dc: 1 }
+      ];
+      for (const dir of directions) {
+        const nb = current.b + dir.db;
+        const nc = current.c + dir.dc;
+        if (nb >= 0 && nb < 9 && nc >= 0 && nc < 9) {
+          if (board[nb][nc] === player) {
+            stack.push({ b: nb, c: nc });
+          }
+        }
+      }
+    }
+    return group;
+  },
+
+  // 囲まれているか
+  isSurrounded(board, group, player) {
+    const opponent = player === "white" ? "black" : "white";
+    for (const { b, c } of group) {
+      const directions = [
+        { db: -1, dc: 0 }, { db: 1, dc: 0 }, { db: 0, dc: -1 }, { db: 0, dc: 1 }
+      ];
+      for (const dir of directions) {
+        const nb = b + dir.db;
+        const nc = c + dir.dc;
+        if (nb >= 0 && nb < 9 && nc >= 0 && nc < 9) {
+          if (board[nb][nc] === null) {
+            return false; // 空きがあり、囲まれていない
+          }
+        }
+      }
+    }
+    return true; // 囲まれている
+  },
+
+  // コウかどうか
+  isKo(board, b, c, player, gameState) {
+    // 簡易チェック: 前のターンと同じ状態に戻るか
+    // 実際の実装では、過去のボード状態を保持する必要がある
+    return false; // 簡易実装では無視
+  }
+};
