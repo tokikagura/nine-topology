@@ -1,0 +1,546 @@
+/**
+ * NTAI Engine - Claude-Sonnet_Steadfast_v1
+ * Nine Topology v2.8-test 用 外部AIエンジン
+ * Author: Claude (Anthropic)
+ *
+ * ===== 設計思想 =====
+ * これは既存の Claude-Topologist(v9) の後継版ではなく、別の哲学で書いた別物です。
+ *
+ * 1. 【安全ゲート方式】
+ *    v9は「相手の脅威が大きいほど加点から減点する」という連続的なスコア調整でした。
+ *    私は逆に、まず「相手の最善手で壊滅的被害(大量捕獲)が出る手」を候補から
+ *    ハードに除外してから、残った安全な手の中でベストを選びます。
+ *    見た目のスコアがどれだけ良くても、致命傷になりうる手は最初から土俵に乗せません。
+ *
+ * 2. 【赤壁は能動的な"盾"】
+ *    赤壁(secretRed)は「絶対障壁」で、隣接すると空きマスへの露出を断てます。
+ *    v9はこの"盾"としての価値を評価に入れておらず、終盤まで温存する設計でした。
+ *    私は逆に、中盤から自陣の露出した(空きマスに接する)価値ある石を
+ *    赤壁で計画的に守りにいきます。温存より先行投資。
+ *
+ * 3. 【仕様書に忠実】
+ *    APIドキュメントには「1回の呼び出しにつき1つの決定を返す」とあり、
+ *    配置とスライドが同一ターン内で連動する保証はどこにも書かれていません。
+ *    そのため、配置フェーズとスライドフェーズを完全に独立した判断として扱い、
+ *    「次に自分でもう一押しできる」という未確認の前提には乗らない設計にしています。
+ *
+ * 4. 【状況に応じて性格を変える】
+ *    点差とターン数を見て、優勢なら手堅く・劣勢なら安全ゲートの基準を緩めて
+ *    勝負に出る、というように積極性そのものを動的に調整します。
+ *
+ * ===== 確認できた実盤面の仕様(観測ベース) =====
+ * ・スライドは「ブロック内の3x3をその方向へ1マス分、ラップアラウンドさせる」動作。
+ *   (例: leftなら各行が左に1マスシフトし、左端は右端に回り込む)
+ * ・secretRed宣言は宣言時点では盤面を変化させず、2ターン後に該当マスが
+ *   red(絶対障壁)として出現する。
+ * ・ガスは空きマスが閾値付近になったとき、空きマスに隣接するwhite/black石を
+ *   まとめてneutral化し、その結果連が分断されて呼吸点0になった側も同時に捕獲される。
+ *   (この正確な発火条件はAPI文書には明記されていないため、以下の実装は
+ *   "空きマスに接する石をなるべく減らす"という安全側の一般原則として組み込んでいる)
+ */
+
+(function () {
+  "use strict";
+
+  const W = {
+    capturePoint: 15,
+    blueCapturePoint: 22,
+    atariPenalty: -26,
+    lowLib2Penalty: -6,
+    lowLib3Penalty: -2,
+    oppAtariBonus: 18,
+    concSoftLimit: 10,
+    concSoftPenaltyPerStone: -3,
+    concHardLimit: 13,
+    concHardPenaltyPerStone: -8,
+    oppConcSoftBonusPerStone: 1.5,
+    oppConcHardBonusPerStone: 4,
+    centerBonus: 0.4,
+    blueTargetWeight: 2.2,
+    redShieldPerExposedFriend: 4.5,
+    redEnemySynergy: 3,
+    redOpportunityCost: -5,
+    exposureBalanceWeight: 1.0,
+    exposureBaselineFactor: 0.3,
+    gasProjectionWeight: 10,
+    gasProjectionRange: 30,
+    win: 1e9,
+  };
+
+  const DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+
+  // ---- 既知の青石出現マス(公式APIドキュメント記載の固定スケジュール) ----
+  const BLUE_TARGETS = [
+    { turn: 0, b: 0, c: 8 },  // B1-c3 (初期)
+    { turn: 12, b: 8, c: 0 }, // B9-a1
+    { turn: 50, b: 4, c: 4 }, // B5-b2
+  ];
+
+  // ---------------- 座標変換 ----------------
+  function bcToGlobal(b, c) {
+    return { r: Math.floor(b / 3) * 3 + Math.floor(c / 3), col: (b % 3) * 3 + (c % 3) };
+  }
+  function globalToBC(r, col) {
+    return { b: Math.floor(r / 3) * 3 + Math.floor(col / 3), c: (r % 3) * 3 + (col % 3) };
+  }
+  function toGrid(board) {
+    const g = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+      const { r, col } = bcToGlobal(b, c);
+      g[r][col] = board[b][c];
+    }
+    return g;
+  }
+  function toBoard(g) {
+    const board = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let r = 0; r < 9; r++) for (let col = 0; col < 9; col++) {
+      const { b, c } = globalToBC(r, col);
+      board[b][c] = g[r][col];
+    }
+    return board;
+  }
+  function cloneBoard(board) { return board.map((blk) => blk.slice()); }
+
+  // ---------------- スライド(ブロック内ラップアラウンドシフト) ----------------
+  function shiftBlock(cells, dir) {
+    const g = [cells.slice(0, 3), cells.slice(3, 6), cells.slice(6, 9)];
+    const out = [[], [], []];
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        let sr = r, sc = c;
+        if (dir === "up") sr = (r + 1) % 3;
+        else if (dir === "down") sr = (r + 2) % 3;
+        else if (dir === "left") sc = (c + 1) % 3;
+        else if (dir === "right") sc = (c + 2) % 3;
+        out[r][c] = g[sr][sc];
+      }
+    }
+    return [...out[0], ...out[1], ...out[2]];
+  }
+
+  // ---------------- 連・呼吸点・捕獲 ----------------
+  function findGroups(grid, color) {
+    const seen = new Set();
+    const groups = [];
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+      const key = r + "," + c;
+      if (seen.has(key) || grid[r][c] !== color) continue;
+      const stack = [[r, c]];
+      seen.add(key);
+      const cells = [[r, c]];
+      const libs = new Set();
+      while (stack.length) {
+        const [cr, cc] = stack.pop();
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          const v = grid[nr][nc];
+          const nk = nr + "," + nc;
+          if (v === null) libs.add(nk);
+          else if (v === color && !seen.has(nk)) { seen.add(nk); cells.push([nr, nc]); stack.push([nr, nc]); }
+        }
+      }
+      groups.push({ cells, liberties: libs });
+    }
+    return groups;
+  }
+
+  function resolveCaptures(grid) {
+    const g = grid.map((row) => row.slice());
+    let capW = 0, capB = 0, capBlue = 0;
+    for (const color of ["white", "black", "blue"]) {
+      const groups = findGroups(g, color);
+      for (const grp of groups) {
+        if (grp.liberties.size === 0) {
+          for (const [r, c] of grp.cells) {
+            g[r][c] = null;
+            if (color === "white") capW++; else if (color === "black") capB++; else capBlue++;
+          }
+        }
+      }
+    }
+    return { grid: g, capW, capB, capBlue };
+  }
+
+  function hasEmptyNeighbor(grid, r, c) {
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+      if (grid[nr][nc] === null) return true;
+    }
+    return false;
+  }
+
+  // ---- ガス想定シミュレーション(観測ベースの安全側モデル) ----
+  function projectGas(board) {
+    const grid = toGrid(board);
+    const converted = grid.map((row) => row.slice());
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+      const v = grid[r][c];
+      if ((v === "white" || v === "black") && hasEmptyNeighbor(grid, r, c)) converted[r][c] = "neutral";
+    }
+    return resolveCaptures(converted);
+  }
+
+  // ---------------- 手のシミュレーション ----------------
+  function simulatePlacement(board, bIdx, cIdx, color) {
+    const grid = toGrid(board);
+    const { r, col } = bcToGlobal(bIdx, cIdx);
+    grid[r][col] = color;
+    const resolved = resolveCaptures(grid);
+    const myGroup = findGroups(resolved.grid, color).find((g) => g.cells.some(([gr, gc]) => gr === r && gc === col));
+    const captured = color === "white" ? resolved.capB + resolved.capBlue : resolved.capW + resolved.capBlue;
+    const lostOwn = color === "white" ? resolved.capW : resolved.capB;
+    const suicide = (!myGroup || myGroup.liberties.size === 0) && captured === 0;
+    return { grid: resolved.grid, capW: resolved.capW, capB: resolved.capB, capBlue: resolved.capBlue, suicide, r, col };
+  }
+
+  function simulateSlide(board, bIdx, dir, color) {
+    const newBoard = cloneBoard(board);
+    newBoard[bIdx] = shiftBlock(board[bIdx], dir);
+    const grid = toGrid(newBoard);
+    const resolved = resolveCaptures(grid);
+    return { grid: resolved.grid, capW: resolved.capW, capB: resolved.capB, capBlue: resolved.capBlue };
+  }
+
+  // ---------------- 局面評価 ----------------
+  function evaluatePosition(grid, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    let score = 0;
+
+    for (const g of findGroups(grid, us)) {
+      const size = g.cells.length;
+      const dangerMult = 1 + Math.min(size, 20) * 0.12;
+      if (g.liberties.size === 1) score += W.atariPenalty * dangerMult;
+      else if (g.liberties.size === 2) score += W.lowLib2Penalty * dangerMult;
+      else if (g.liberties.size === 3) score += W.lowLib3Penalty * dangerMult;
+      if (size > W.concSoftLimit) score += (size - W.concSoftLimit) * W.concSoftPenaltyPerStone;
+      if (size > W.concHardLimit) score += (size - W.concHardLimit) * W.concHardPenaltyPerStone;
+    }
+    for (const g of findGroups(grid, opp)) {
+      const size = g.cells.length;
+      if (g.liberties.size === 1) score += W.oppAtariBonus;
+      if (size > W.concSoftLimit) score += (size - W.concSoftLimit) * W.oppConcSoftBonusPerStone;
+      if (size > W.concHardLimit) score += (size - W.concHardLimit) * W.oppConcHardBonusPerStone;
+    }
+
+    // 露出バランス(自石/敵石が空きマスに接している数の差)
+    if (gameState.emptyCount !== undefined) {
+      let ownExp = 0, oppExp = 0;
+      for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+        if (grid[r][c] === us && hasEmptyNeighbor(grid, r, c)) ownExp++;
+        else if (grid[r][c] === opp && hasEmptyNeighbor(grid, r, c)) oppExp++;
+      }
+      const proximity = Math.max(W.exposureBaselineFactor, Math.min(1, 1 - (gameState.emptyCount - 10) / 55));
+      score += (oppExp - ownExp) * W.exposureBalanceWeight * proximity;
+    }
+
+    // 青石ターゲット布陣ボーナス
+    if (gameState.turnNumber !== undefined) {
+      for (const t of BLUE_TARGETS) {
+        const { r, col } = bcToGlobal(t.b, t.c);
+        const turnsUntil = t.turn - gameState.turnNumber;
+        if (turnsUntil < -8 || turnsUntil > 25) continue;
+        if (grid[r][col] !== null) continue;
+        const proximity = Math.max(0.15, 1 - Math.abs(turnsUntil) / 25);
+        let ownAdj = 0, oppAdj = 0;
+        for (const [dr, dc] of DIRS) {
+          const nr = r + dr, nc = col + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          if (grid[nr][nc] === us) ownAdj++; else if (grid[nr][nc] === opp) oppAdj++;
+        }
+        score += (ownAdj - oppAdj) * W.blueTargetWeight * proximity;
+      }
+    }
+
+    // 中央ブロック支配
+    // v1.0の実戦で「中央ブロックを序盤から埋め尽くす」一極集中傾向が見られたため、
+    // 同ブロック内の自石が増えるほど追加ボーナスを逓減させ、固まりすぎを抑制する。
+    let centerOwn = 0, centerOpp = 0;
+    for (let r = 3; r <= 5; r++) for (let c = 3; c <= 5; c++) {
+      if (grid[r][c] === us) centerOwn++;
+      else if (grid[r][c] === opp) centerOpp++;
+    }
+    for (let i = 0; i < centerOwn; i++) score += W.centerBonus / (1 + i * 0.35);
+    for (let i = 0; i < centerOpp; i++) score -= W.centerBonus / (1 + i * 0.35);
+
+    return score;
+  }
+
+  function gasScore(board, gameState, us) {
+    if (gameState.emptyCount === undefined || gameState.emptyCount > W.gasProjectionRange) return 0;
+    const proximity = Math.max(0.2, Math.min(1, 1 - (gameState.emptyCount - 10) / (W.gasProjectionRange - 10)));
+    const proj = projectGas(board);
+    const myLoss = us === "white" ? proj.capW : proj.capB;
+    const oppLoss = us === "white" ? proj.capB : proj.capW;
+    const blueGain = proj.capBlue; // どちらが確保するかは特定できないため中立に少し加点
+    let s = (oppLoss - myLoss) * W.gasProjectionWeight * proximity + blueGain * 2 * proximity;
+    if (myLoss >= 15) s -= W.win * 0.4 * proximity;
+    if (oppLoss >= 15) s += W.win * 0.4 * proximity;
+    return s;
+  }
+
+  // ---------------- 安全ゲート ----------------
+  // 与えられた盤面のあと、相手の最善の単発手(配置 or スライド)で
+  // どれだけ捕獲されうるかを高速に見積もる。
+  function opponentBestCapture(board, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    let worst = 0;
+
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+      if (board[b][c] !== null) continue;
+      const sim = simulatePlacement(board, b, c, opp);
+      if (sim.suicide) continue;
+      const captured = opp === "white" ? sim.capB + sim.capBlue : sim.capW + sim.capBlue;
+      if (captured > worst) worst = captured;
+    }
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of ["up", "down", "left", "right"]) {
+        const sim = simulateSlide(board, b, dir, opp);
+        const captured = opp === "white" ? sim.capB + sim.capBlue : sim.capW + sim.capBlue;
+        if (captured > worst) worst = captured;
+      }
+    }
+    return worst;
+  }
+
+  // 点差・ターン数から「どこまで危険を許容するか」を決める(性格の切り替え)
+  function riskBudget(gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const scores = gameState.scores || { white: 0, black: 0 };
+    const margin = (scores[us] || 0) - (scores[opp] || 0);
+    let tolerance = 1.0;
+    if (margin >= 10) tolerance = 0.55;      // 優勢: 手堅く
+    else if (margin <= -10) tolerance = 1.7; // 劣勢: 勝負に出る
+
+    const turn = gameState.turnNumber || 0;
+    if (turn > 110) tolerance *= margin >= 0 ? 0.4 : 1.4; // 終盤: 逃げ切り or 総攻撃
+
+    return Math.max(3, Math.round(9 * tolerance)); // これ以上の一発捕獲は原則除外
+  }
+
+  // ---------------- Setupフェーズ ----------------
+  function decideSetup(board, gameState) {
+    const corners = [0, 2, 6, 8];
+    // B1・B9は青石関連マスへの隣接を優先。B3・B7はブロック中央(idx4)を優先。
+    const preferred = { 0: [7, 5, 1, 3, 0, 2, 6, 8, 4], 8: [1, 3, 4, 0, 2, 5, 6, 7, 8], 2: [4, 1, 3, 5, 7, 0, 2, 6, 8], 6: [4, 1, 3, 5, 7, 0, 2, 6, 8] };
+    for (const b of corners) {
+      let used = false;
+      for (let c = 0; c < 9; c++) if (board[b][c] === "white" || board[b][c] === "black") { used = true; break; }
+      if (used) continue;
+      for (const c of preferred[b]) {
+        if (board[b][c] === null) return { place: { b, c } };
+      }
+    }
+    for (const b of corners) for (let c = 0; c < 9; c++) if (board[b][c] === null) return { place: { b, c } };
+    return null;
+  }
+
+  // ---------------- 自分の追撃スライド価値(v1.1で追加) ----------------
+  // 棋譜の表記("1. W+B1-b2 / W>B1-D"のように、同一ターン内で同一プレイヤーが
+  // 配置→スライドを連続実行している)から、この2つが自分にとって連動している
+  // ことが確認できたため、配置候補の評価に「直後に打てる自分の最善スライドの
+  // 価値」を軽く加味する。相手の応手は未確定なので安全ゲート自体はスライド前の
+  // 盤面で保守的に判定し、ここはあくまで同点候補同士の押し上げ材料に留める。
+  function bestOwnFollowupSlideValue(board, gameState, us) {
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    let best = 0;
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      if (!board[b].some((v) => v === "white" || v === "black")) continue;
+      for (const dir of ["up", "down", "left", "right"]) {
+        const sim = simulateSlide(board, b, dir, us);
+        const captured = us === "white" ? sim.capB + sim.capBlue : sim.capW + sim.capBlue;
+        const gain = captured * W.capturePoint;
+        if (gain > best) best = gain;
+      }
+    }
+    return best;
+  }
+
+  // ---------------- Placeフェーズ ----------------
+  function decidePlace(board, gameState) {
+    const us = gameState.player;
+    const budget = riskBudget(gameState, us);
+    const candidates = [];
+
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+      if (board[b][c] !== null) continue;
+      const sim = simulatePlacement(board, b, c, us);
+      if (sim.suicide) continue;
+      const captured = us === "white" ? sim.capB + sim.capBlue : sim.capW + sim.capBlue;
+      if (captured >= 15) return { place: { b, c, secretRed: false } }; // 即決着手は最優先
+
+      const material = captured * W.capturePoint;
+      const position = evaluatePosition(sim.grid, gameState, us);
+      const gas = gasScore(toBoard(sim.grid), gameState, us);
+      candidates.push({ b, c, secretRed: false, score: material + position + gas, resultBoard: toBoard(sim.grid) });
+    }
+
+    // 赤壁候補: 敵に隣接 or 自陣の露出した石を守れる有望マスのみに絞って評価
+    // v1.1実戦(対Claude-Rush)で「序盤11手で5枚を使い切る」という乱発が判明。
+    // 序盤(ターン20未満)は明確な脅威・盾価値が無い限り使わないゲートを追加し、
+    // 機会コストも引き上げて温存させる。
+    if (gameState.redWallsLeft > 0) {
+      const grid = toGrid(board);
+      const turnNumber = gameState.turnNumber || 0;
+      for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+        if (board[b][c] !== null) continue;
+        const { r, col } = bcToGlobal(b, c);
+        let enemyAdj = 0, shieldValue = 0;
+        for (const [dr, dc] of DIRS) {
+          const nr = r + dr, nc = col + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          if (grid[nr][nc] === (us === "white" ? "black" : "white")) enemyAdj++;
+          else if (grid[nr][nc] === us && hasEmptyNeighbor(grid, nr, nc)) shieldValue++;
+        }
+        if (enemyAdj === 0 && shieldValue === 0) continue;
+        // 序盤は「隣接2以上」など明確な価値がなければ候補にすらしない
+        if (turnNumber < 20 && enemyAdj < 2 && shieldValue < 2) continue;
+        const proximity = gameState.emptyCount !== undefined
+          ? Math.max(0.15, Math.min(1, 1 - (gameState.emptyCount - 10) / 55))
+          : 0.35;
+        const score = W.redOpportunityCost
+          + enemyAdj * W.redEnemySynergy
+          + shieldValue * W.redShieldPerExposedFriend * proximity;
+        candidates.push({ b, c, secretRed: true, score, resultBoard: board });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, z) => z.score - a.score);
+
+    // 直後に打てる自分の最善スライドの価値を、上位候補(計算コストを抑えるため
+    // 上位20件まで)に軽く加味してから並べ直す。赤壁宣言は盤面が変わらないため対象外。
+    const FOLLOWUP_WEIGHT = 0.6;
+    const followupPoolSize = Math.min(20, candidates.length);
+    for (let i = 0; i < followupPoolSize; i++) {
+      const cand = candidates[i];
+      if (cand.secretRed) continue;
+      cand.score += bestOwnFollowupSlideValue(cand.resultBoard, gameState, us) * FOLLOWUP_WEIGHT;
+    }
+    candidates.sort((a, z) => z.score - a.score);
+
+    // リスク加重選択(v1.3の是正版): 減点の重みが捕獲価値(15点)に対して
+    // 軽すぎた(2.0)ため、実質リスクを無視するのと同じになり、GPT_Strategist_v3戦で
+    // 完全に囲まれて合法手が無くなる(NO_LEGAL_PLACE)という重い後退を招いた。
+    // 減点を捕獲価値と同水準に是正し、「一手で15個以上取られる=即敗北」級の
+    // 候補だけは点数計算とは別にハード除外する安全弁を戻す。
+    const pool = candidates.slice(0, 14);
+    let bestNet = -Infinity, chosen = null, fallback = candidates[0];
+    for (const cand of pool) {
+      const worst = cand.secretRed ? opponentBestCapture(board, gameState, us) : opponentBestCapture(cand.resultBoard, gameState, us);
+      if (worst >= CATASTROPHE_CAP) continue; // 即敗北級は問答無用で除外
+      const excess = Math.max(0, worst - budget);
+      const netScore = cand.score - excess * RISK_PENALTY_PER_STONE;
+      if (netScore > bestNet) { bestNet = netScore; chosen = cand; }
+    }
+    if (!chosen) chosen = fallback; // 安全な手が皆無(詰み)の場合のみ最良スコアで勝負
+
+    return { place: { b: chosen.b, c: chosen.c, secretRed: !!chosen.secretRed } };
+  }
+
+  // ---------------- Slideフェーズ ----------------
+  // v1.0の実戦(対Claude-Topologist)で判明したバグへの対処:
+  // 「捕獲も無いのに、露出スコアの微小な差だけを追いかけて同じブロックを
+  //  何十ターンも揺らし続ける空回り」が発生し、無駄ターンの間に相手に
+  //  地道に押し込まれて負けていた。EPSILONゲートで「PASSより明確に良い」
+  //  場合以外は動かさないようにする。
+  const SLIDE_EPSILON = 1.5;
+  const REPEAT_PENALTY_PER_HIT = 2.5;
+  const RISK_PENALTY_PER_STONE = 18; // 捕獲価値(15点)よりわずかに重く=互角以上の見返りがない限り損な取引はしない
+  const CATASTROPHE_CAP = 15; // 一手で15個以上取られる=即敗北ルールに直結するため問答無用で除外
+  const slideMemory = { white: [], black: [] }; // 直近使用ブロックの記憶(セッション内)
+
+  function decideSlide(board, gameState) {
+    const us = gameState.player;
+    const budget = riskBudget(gameState, us);
+    const locked = new Set(gameState.slideLockedBlocks || []);
+
+    const passScore = evaluatePosition(toGrid(board), gameState, us) + gasScore(board, gameState, us);
+    const candidates = [{ pass: true, score: passScore, resultBoard: board, captured: 0 }];
+
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      // 石が一つも無いブロックを回しても盤面は変わらない(無意味な計算を省く)
+      const hasStone = board[b].some((v) => v === "white" || v === "black");
+      if (!hasStone) continue;
+      for (const dir of ["up", "down", "left", "right"]) {
+        const sim = simulateSlide(board, b, dir, us);
+        const captured = us === "white" ? sim.capB + sim.capBlue : sim.capW + sim.capBlue;
+        if (captured >= 15) return { slide: { b, dir } };
+        const material = captured * W.capturePoint;
+        const position = evaluatePosition(sim.grid, gameState, us);
+        const gas = gasScore(toBoard(sim.grid), gameState, us);
+        candidates.push({ b, dir, score: material + position + gas, resultBoard: toBoard(sim.grid), captured });
+      }
+    }
+
+    // 直近何ターンかで同じブロックを揺らしていたら軽くペナルティ(単調な偏りを抑える)
+    const history = slideMemory[us] || [];
+    for (const cand of candidates) {
+      if (cand.pass) continue;
+      const recentHits = history.filter((h) => h === cand.b).length;
+      if (recentHits > 0 && cand.captured === 0) cand.score -= recentHits * REPEAT_PENALTY_PER_HIT;
+    }
+
+    candidates.sort((a, z) => z.score - a.score);
+    const best = candidates[0];
+
+    // 実質的な効果(捕獲、または明確なスコア差)が無ければPASSする
+    if (!best.pass && best.captured === 0 && (best.score - passScore) < SLIDE_EPSILON) {
+      return { slide: { pass: true } };
+    }
+
+    const pool = candidates
+      .slice(0, 10)
+      .filter((c) => c.pass || c.captured > 0 || (c.score - passScore) >= SLIDE_EPSILON);
+    let bestNet = -Infinity, chosen = null;
+    for (const cand of pool) {
+      const worst = cand.pass ? 0 : opponentBestCapture(cand.resultBoard, gameState, us);
+      if (worst >= CATASTROPHE_CAP) continue; // 即敗北級は問答無用で除外
+      const excess = Math.max(0, worst - budget);
+      const netScore = cand.score - excess * RISK_PENALTY_PER_STONE;
+      if (netScore > bestNet) { bestNet = netScore; chosen = cand; }
+    }
+    if (!chosen) chosen = best; // 安全な手が皆無(詰み)の場合のみ最良スコアで勝負
+
+    if (!chosen.pass) {
+      history.push(chosen.b);
+      if (history.length > 4) history.shift();
+      slideMemory[us] = history;
+    }
+
+    if (chosen.pass) return { slide: { pass: true } };
+    return { slide: { b: chosen.b, dir: chosen.dir } };
+  }
+
+  // ---------------- エンジン本体 ----------------
+  window.NTAI_Engine = {
+    name: "Claude-Sonnet_Steadfast_v1",
+    author: "Claude (Anthropic)",
+    version: "1.3.1",
+
+    decideNextMove(board, gameState) {
+      try {
+        const phase = gameState.phase;
+        if (phase === "setup") return decideSetup(board, gameState);
+        if (phase === "place") return decidePlace(board, gameState);
+        if (phase === "slide") return decideSlide(board, gameState);
+        return null;
+      } catch (e) {
+        // 例外時も不正な形は返さず、確実に合法な手にフォールバックする
+        try {
+          const phase = gameState && gameState.phase;
+          if (phase === "slide") return { slide: { pass: true } };
+          for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+            if (board[b][c] === null) return { place: { b, c, secretRed: false } };
+          }
+        } catch (e2) { /* ignore */ }
+        return null;
+      }
+    },
+  };
+})();
