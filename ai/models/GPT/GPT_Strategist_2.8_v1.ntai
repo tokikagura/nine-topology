@@ -1,0 +1,489 @@
+/**
+ * Nine Topology v2.8-test engine
+ * GPT_Strategist_v3
+ * Independent implementation for the GPT vs Gemini Pro direct match.
+ */
+window.NTAI_Engine = {
+  name: "GPT_Strategist_v3",
+  _plan: null,
+  _lastTurn: 0,
+  _lastRedTurn: -99,
+  _slides: [],
+
+  decideNextMove(board, gameState) {
+    "use strict";
+
+    const self = this;
+    const me = gameState.player;
+    const opp = me === "white" ? "black" : "white";
+    const phase = gameState.phase;
+    const turn = Number(gameState.turnNumber) || 1;
+    const gasActive = !!gameState.gasPhaseActive;
+    const redLeft = Number(gameState.redWallsLeft) || 0;
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const scores = {
+      white: Number(gameState.scores && gameState.scores.white) || 0,
+      black: Number(gameState.scores && gameState.scores.black) || 0
+    };
+    const secured = {
+      white: Number(gameState.blueStonesSecured && gameState.blueStonesSecured.white) || 0,
+      black: Number(gameState.blueStonesSecured && gameState.blueStonesSecured.black) || 0
+    };
+    const protection = {
+      white: Number(gameState.blueProtectionRemaining && gameState.blueProtectionRemaining.white) || 0,
+      black: Number(gameState.blueProtectionRemaining && gameState.blueProtectionRemaining.black) || 0
+    };
+    const dropState = {
+      B9: !!(gameState.blueDropState && gameState.blueDropState.B9),
+      B5: !!(gameState.blueDropState && gameState.blueDropState.B5)
+    };
+    const protectedBoard = Array.from({ length: 9 }, (_, b) =>
+      Array.from({ length: 9 }, (_, c) => !!(gameState.gasProtectedBoard && gameState.gasProtectedBoard[b] && gameState.gasProtectedBoard[b][c]))
+    );
+    const permanentProtected = { white: 0, black: 0 };
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+      const v = board[b][c];
+      if (protectedBoard[b][c] && (v === "white" || v === "black")) permanentProtected[v]++;
+    }
+
+    if (turn < self._lastTurn || (turn === 1 && phase === "setup")) {
+      self._plan = null;
+      self._lastRedTurn = -99;
+      self._slides = [];
+    }
+    self._lastTurn = turn;
+
+    const DIRS = ["up", "down", "left", "right"];
+    const STEPS = [[1,0],[-1,0],[0,1],[0,-1]];
+    const clone = src => src.map(x => x.slice());
+    const other = p => p === "white" ? "black" : "white";
+    const keyToken = { white: "W", black: "K", blue: "U", "blue-reserved": "Q", red: "R", neutral: "N" };
+    const keyOf = src => src.map(x => x.map(v => v === null ? "." : keyToken[v]).join("")).join("/");
+    const emptyCount = src => {
+      let n = 0;
+      for (const block of src) for (const v of block) if (v === null) n++;
+      return n;
+    };
+    const bcToRC = (b, c) => ({
+      r: Math.floor(b / 3) * 3 + Math.floor(c / 3),
+      c: (b % 3) * 3 + (c % 3)
+    });
+    const toGrid = src => {
+      const g = Array.from({ length: 9 }, () => Array(9).fill(null));
+      for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+        const p = bcToRC(b, c);
+        g[p.r][p.c] = src[b][c];
+      }
+      return g;
+    };
+    const fromGrid = g => {
+      const out = Array.from({ length: 9 }, () => Array(9).fill(null));
+      for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+        const b = Math.floor(r / 3) * 3 + Math.floor(c / 3);
+        const k = (r % 3) * 3 + (c % 3);
+        out[b][k] = g[r][c];
+      }
+      return out;
+    };
+    const group = (g, sr, sc) => {
+      const type = g[sr][sc];
+      if (!type || type === "red" || type === "neutral" || type === "blue-reserved") {
+        return { type, stones: [], libs: 99, libertyCells: [] };
+      }
+      const seen = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const q = [[sr, sc]];
+      const stones = [];
+      const libs = new Set();
+      seen[sr][sc] = true;
+      for (let i = 0; i < q.length; i++) {
+        const [r, c] = q[i];
+        stones.push([r, c]);
+        for (const [dr, dc] of STEPS) {
+          const nr = r + dr, nc = c + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          const v = g[nr][nc];
+          if (v === null) libs.add(nr + "," + nc);
+          else if (v === type && !seen[nr][nc]) {
+            seen[nr][nc] = true;
+            q.push([nr, nc]);
+          }
+        }
+      }
+      return { type, stones, libs: libs.size, libertyCells: Array.from(libs) };
+    };
+    const scanGroups = src => {
+      const g = toGrid(src);
+      const seen = Array.from({ length: 9 }, () => Array(9).fill(false));
+      const groups = [];
+      for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+        const v = g[r][c];
+        if (!["white", "black", "blue"].includes(v) || seen[r][c]) continue;
+        const x = group(g, r, c);
+        for (const [rr, cc] of x.stones) seen[rr][cc] = true;
+        groups.push(x);
+      }
+      return { g, groups };
+    };
+    const removeZero = (src, onlyEnemy, player) => {
+      const scanned = scanGroups(src);
+      const cap = { white: 0, black: 0, blue: 0 };
+      const removed = [];
+      for (const x of scanned.groups) {
+        if (x.libs !== 0) continue;
+        if (onlyEnemy && x.type !== other(player) && x.type !== "blue") continue;
+        cap[x.type] += x.stones.length;
+        removed.push(x);
+      }
+      for (const x of removed) for (const [r, c] of x.stones) scanned.g[r][c] = null;
+      return { board: fromGrid(scanned.g), cap, removed };
+    };
+    const ownLiberties = (src, player, b, c) => {
+      const g = toGrid(src), p = bcToRC(b, c);
+      if (g[p.r][p.c] !== player) return 0;
+      return group(g, p.r, p.c).libs;
+    };
+    const place = (src, player, b, c, baseScores = scores) => {
+      if (!src[b] || src[b][c] !== null) return null;
+      const next = clone(src);
+      next[b][c] = player;
+      const resolved = removeZero(next, true, player);
+      if (ownLiberties(resolved.board, player, b, c) === 0) return null;
+      const outScores = { white: baseScores.white, black: baseScores.black };
+      outScores[player] += resolved.cap[other(player)] || 0;
+      return {
+        board: resolved.board,
+        scores: outScores,
+        cap: resolved.cap,
+        blueGain: resolved.cap.blue || 0,
+        ended: (resolved.cap[other(player)] || 0) + (resolved.cap.blue || 0) > 0,
+        b, c
+      };
+    };
+    const restoreReservations = src => {
+      const out = clone(src);
+      for (const ev of [{ id: "B9", b: 8, c: 0 }, { id: "B5", b: 4, c: 4 }]) {
+        if (dropState[ev.id]) continue;
+        const moved = out[ev.b].indexOf("blue-reserved");
+        if (moved < 0 || moved === ev.c) continue;
+        const displaced = out[ev.b][ev.c];
+        out[ev.b][ev.c] = "blue-reserved";
+        out[ev.b][moved] = displaced;
+      }
+      return out;
+    };
+    const rotate = (src, b, dir) => {
+      const out = clone(src), a = out[b];
+      if (!a) return null;
+      if (dir === "right") {
+        [a[0],a[1],a[2]]=[a[2],a[0],a[1]]; [a[3],a[4],a[5]]=[a[5],a[3],a[4]]; [a[6],a[7],a[8]]=[a[8],a[6],a[7]];
+      } else if (dir === "left") {
+        [a[0],a[1],a[2]]=[a[1],a[2],a[0]]; [a[3],a[4],a[5]]=[a[4],a[5],a[3]]; [a[6],a[7],a[8]]=[a[7],a[8],a[6]];
+      } else if (dir === "down") {
+        [a[0],a[3],a[6]]=[a[6],a[0],a[3]]; [a[1],a[4],a[7]]=[a[7],a[1],a[4]]; [a[2],a[5],a[8]]=[a[8],a[2],a[5]];
+      } else if (dir === "up") {
+        [a[0],a[3],a[6]]=[a[3],a[6],a[0]]; [a[1],a[4],a[7]]=[a[4],a[7],a[1]]; [a[2],a[5],a[8]]=[a[5],a[8],a[2]];
+      } else return null;
+      return restoreReservations(out);
+    };
+    const slide = (src, player, b, dir, baseScores = scores) => {
+      const moved = rotate(src, b, dir);
+      if (!moved) return null;
+      const resolved = removeZero(moved, false, player);
+      const outScores = { white: baseScores.white, black: baseScores.black };
+      outScores[player] += resolved.cap[other(player)] || 0;
+      outScores[other(player)] += resolved.cap[player] || 0;
+      return {
+        board: resolved.board,
+        scores: outScores,
+        cap: resolved.cap,
+        blueGain: resolved.cap.blue || 0,
+        action: { b, dir }
+      };
+    };
+
+    const exposure = src => {
+      const g = toGrid(src), seen = new Set();
+      const out = { white: 0, black: 0 };
+      for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) if (g[r][c] === null) {
+        for (const [dr, dc] of STEPS) {
+          const nr = r + dr, nc = c + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          const v = g[nr][nc];
+          if (v !== "white" && v !== "black") continue;
+          const k = nr + "," + nc;
+          if (!seen.has(k)) { seen.add(k); out[v]++; }
+        }
+      }
+      return out;
+    };
+    const objectiveScore = (src, player) => {
+      const enemy = other(player), g = toGrid(src);
+      let value = 0;
+      const events = [
+        { b: 8, c: 0, due: 12 },
+        { b: 4, c: 4, due: 50 }
+      ];
+      for (const ev of events) {
+        const v = src[ev.b][ev.c];
+        if (v !== "blue-reserved" && v !== "blue") continue;
+        const p = bcToRC(ev.b, ev.c);
+        let own = 0, foe = 0, free = 0;
+        for (const [dr, dc] of STEPS) {
+          const r = p.r + dr, c = p.c + dc;
+          if (r < 0 || r > 8 || c < 0 || c > 8) continue;
+          if (g[r][c] === player) own++;
+          else if (g[r][c] === enemy) foe++;
+          else if (g[r][c] === null) free++;
+        }
+        const distance = Math.max(0, ev.due - turn);
+        const urgency = ev.due <= turn ? 75 : distance <= 5 ? 58 : distance <= 14 ? 32 : 12;
+        value += (own - foe) * urgency + free * 2;
+        if (own >= 2 && foe === 0) value += urgency * 0.8;
+        if (foe >= 2 && own === 0) value -= urgency;
+      }
+      return value;
+    };
+    const boardValue = (src, player, stateScores, blueExtra = 0) => {
+      const enemy = other(player);
+      const scanned = scanGroups(src);
+      const stats = {
+        white: { stones: 0, groups: 0, danger: 0, shape: 0, largest: 0 },
+        black: { stones: 0, groups: 0, danger: 0, shape: 0, largest: 0 }
+      };
+      let blueValue = 0;
+      for (const x of scanned.groups) {
+        const n = x.stones.length, l = x.libs;
+        if (x.type === "blue") {
+          let ownTouch = 0, foeTouch = 0;
+          const touched = new Set();
+          for (const [r, c] of x.stones) for (const [dr, dc] of STEPS) {
+            const nr = r + dr, nc = c + dc;
+            if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+            const k = nr + "," + nc;
+            if (touched.has(k)) continue;
+            touched.add(k);
+            if (scanned.g[nr][nc] === player) ownTouch++;
+            else if (scanned.g[nr][nc] === enemy) foeTouch++;
+          }
+          const urgency = l <= 1 ? 220 : l === 2 ? 105 : l === 3 ? 45 : 14;
+          blueValue += (ownTouch - foeTouch) * urgency;
+          continue;
+        }
+        const s = stats[x.type];
+        s.stones += n; s.groups++; s.largest = Math.max(s.largest, n);
+        if (l === 1) s.danger += 42 * n + 7 * n * n + (n >= 15 ? 9000 : 0);
+        else if (l === 2) s.danger += 8 * n + 1.15 * n * n + (n >= 13 ? 220 : 0);
+        else if (l === 3 && n >= 10) s.danger += n * 2.2;
+        s.shape += Math.min(l, 7) * Math.sqrt(n) * 7 + Math.min(n, 10) * Math.min(l, 5) * 1.4;
+        if (n >= 16 && l <= 3) s.danger += 180 + (n - 15) * 22;
+      }
+      const mine = stats[player], theirs = stats[enemy];
+      let val = ((stateScores[player] || 0) - (stateScores[enemy] || 0)) * (turn > 105 ? 95 : 43);
+      val += (mine.stones - theirs.stones) * 4.2;
+      val += mine.shape * 1.08 - theirs.shape * 0.94;
+      val -= mine.danger * 1.12;
+      val += theirs.danger * 0.98;
+      val += blueValue + objectiveScore(src, player);
+      val += ((secured[player] + (player === me ? blueExtra : 0)) - secured[enemy]) * 265;
+      const ownProt = protection[player] + (player === me ? blueExtra * 5 : 0);
+      const foeProt = protection[enemy];
+      const exp = exposure(src), empties = emptyCount(src);
+      const gasNear = gasActive || empties <= 17;
+      if (gasNear) {
+        const ownLoss = Math.max(0, exp[player] - permanentProtected[player] - ownProt);
+        const foeLoss = Math.max(0, exp[enemy] - permanentProtected[enemy] - foeProt);
+        const w = gasActive ? 48 : empties <= 12 ? 42 : 24;
+        val -= ownLoss * w;
+        val += foeLoss * w * 0.88;
+        val += Math.min(exp[player], ownProt) * 8;
+        val -= Math.min(exp[enemy], foeProt) * 6;
+      }
+      for (let b = 0; b < 9; b++) {
+        let own = 0, foe = 0;
+        for (const v of src[b]) { if (v === player) own++; else if (v === enemy) foe++; }
+        if (own >= 7) val -= 38 + (own - 6) * 34;
+        if (foe >= 7) val += 25 + (foe - 6) * 22;
+      }
+      return val;
+    };
+    const repeatPenalty = action => {
+      if (!action || action.pass) return 0;
+      let p = 0;
+      const h = self._slides;
+      const last = h[h.length - 1];
+      const inv = { up: "down", down: "up", left: "right", right: "left" };
+      if (last && last.b === action.b && last.dir === action.dir) p += 60;
+      if (last && last.b === action.b && inv[last.dir] === action.dir) p += 75;
+      const sameBlock = h.slice(-4).filter(x => x.b === action.b).length;
+      p += Math.max(0, sameBlock - 1) * 28;
+      return p;
+    };
+    const tacticalValue = (result, player) => {
+      const enemy = other(player);
+      let v = boardValue(result.board, player, result.scores, result.blueGain || 0);
+      v += (result.cap[enemy] || 0) * 185;
+      v -= (result.cap[player] || 0) * 220;
+      v += (result.blueGain || 0) * 430;
+      if ((result.cap[enemy] || 0) >= 15) v += 10000000;
+      if ((result.cap[player] || 0) >= 15) v -= 10000000;
+      return v;
+    };
+    const bestSlide = (src, player, baseScores, blueGain = 0, useHistory = false) => {
+      let best = {
+        board: src,
+        scores: baseScores,
+        cap: { white: 0, black: 0, blue: 0 },
+        blueGain,
+        action: { pass: true }
+      };
+      let bestVal = tacticalValue(best, player) - 6;
+      for (let b = 0; b < 9; b++) {
+        if (locked.has(b)) continue;
+        for (const dir of DIRS) {
+          const r = slide(src, player, b, dir, baseScores);
+          if (!r) continue;
+          r.blueGain += blueGain;
+          let v = tacticalValue(r, player);
+          if (useHistory) v -= repeatPenalty(r.action);
+          if (v > bestVal) { bestVal = v; best = r; }
+        }
+      }
+      best.value = bestVal;
+      return best;
+    };
+    const allTurns = (src, player, baseScores, useHistory = false) => {
+      const out = [];
+      for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+        const p = place(src, player, b, c, baseScores);
+        if (!p) continue;
+        let result;
+        if (p.ended) {
+          result = { ...p, action: null };
+          result.value = tacticalValue(result, player);
+        } else {
+          result = bestSlide(p.board, player, p.scores, p.blueGain, useHistory);
+        }
+        out.push({ b, c, placement: p, result, value: result.value });
+      }
+      out.sort((a, b) => b.value - a.value || a.b - b.b || a.c - b.c);
+      return out;
+    };
+    const prepareNextBlue = src => {
+      let out = clone(src), forcedEnemyBlue = 0;
+      for (const ev of [{ id: "B9", b: 8, c: 0, due: 12 }, { id: "B5", b: 4, c: 4, due: 50 }]) {
+        if (dropState[ev.id] || turn + 1 !== ev.due || out[ev.b][ev.c] !== "blue-reserved") continue;
+        out[ev.b][ev.c] = "blue";
+        const g = toGrid(out), pos = bcToRC(ev.b, ev.c), x = group(g, pos.r, pos.c);
+        if (x.type === "blue" && x.libs === 0) {
+          for (const [r, c] of x.stones) g[r][c] = null;
+          out = fromGrid(g);
+          forcedEnemyBlue += x.stones.length;
+        }
+      }
+      return { board: out, forcedEnemyBlue };
+    };
+    const opponentReply = candidate => {
+      const enemy = opp;
+      const prepared = prepareNextBlue(candidate.result.board);
+      const replies = allTurns(prepared.board, enemy, candidate.result.scores, false);
+      if (!replies.length) return 1000000;
+      const best = replies[0].result;
+      return boardValue(best.board, me, best.scores, candidate.result.blueGain || 0)
+        - (best.cap[me] || 0) * 210
+        + (best.cap[enemy] || 0) * 80
+        - (best.blueGain || 0) * 360
+        - prepared.forcedEnemyBlue * 520;
+    };
+    const redCandidate = (src, normal, player) => {
+      if (redLeft <= 0 || turn < 52 || turn > 118 || !normal || turn - self._lastRedTurn < 10) return null;
+      const g = toGrid(src), enemy = other(player);
+      let best = null, bestV = -Infinity;
+      for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) {
+        if (src[b][c] !== null) continue;
+        if (!place(src, player, b, c, scores)) continue;
+        const p = bcToRC(b, c);
+        let own = 0, foe = 0, open = 0;
+        for (const [dr, dc] of STEPS) {
+          const r = p.r + dr, cc = p.c + dc;
+          if (r < 0 || r > 8 || cc < 0 || cc > 8) continue;
+          if (g[r][cc] === player) own++;
+          else if (g[r][cc] === enemy) foe++;
+          else if (g[r][cc] === null) open++;
+        }
+        let v = foe * 38 + own * 14 - open * 7;
+        if (foe >= 2 && own >= 1) v += 45;
+        if (turn > 96) v += foe * 12;
+        if (v > bestV) { bestV = v; best = { b, c, v }; }
+      }
+      return best && best.v >= 120 ? best : null;
+    };
+
+    if (phase === "setup") {
+      const preferred = [
+        [0,7],[8,1],[2,7],[6,1],
+        [0,5],[8,3],[2,5],[6,3],
+        [0,4],[8,4],[2,4],[6,4]
+      ];
+      for (const [b,c] of preferred) {
+        if (board[b][c] !== null) continue;
+        if (board[b].some(v => v === me)) continue;
+        self._plan = null;
+        return { place: { b, c } };
+      }
+      for (const b of [0,2,6,8]) for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null && !board[b].some(v => v === me)) return { place: { b, c } };
+      }
+    }
+
+    if (phase === "slide") {
+      if (self._plan && self._plan.turn === turn && self._plan.player === me && self._plan.key === keyOf(board)) {
+        const action = self._plan.action;
+        self._plan = null;
+        if (action && !action.pass) {
+          self._slides.push(action);
+          if (self._slides.length > 6) self._slides.shift();
+        }
+        return { place: null, slide: action || { pass: true } };
+      }
+      self._plan = null;
+      const s = bestSlide(board, me, scores, 0, true);
+      if (s.action && !s.action.pass) {
+        self._slides.push(s.action);
+        if (self._slides.length > 6) self._slides.shift();
+      }
+      return { place: null, slide: s.action || { pass: true } };
+    }
+
+    if (phase === "place") {
+      const candidates = allTurns(board, me, scores, true);
+      if (!candidates.length) return null;
+      const rootCount = emptyCount(board) <= 24 ? 8 : 6;
+      const roots = candidates.slice(0, Math.min(rootCount, candidates.length));
+      for (const x of roots) {
+        if ((x.result.cap[opp] || 0) >= 15) x.search = 10000000 + x.value;
+        else x.search = x.value * 0.26 + opponentReply(x) * 0.74;
+      }
+      for (let i = roots.length; i < candidates.length; i++) candidates[i].search = candidates[i].value - 500;
+      candidates.sort((a,b) => b.search - a.search || b.value - a.value || a.b - b.b || a.c - b.c);
+      const best = candidates[0];
+      const red = redCandidate(board, best, me);
+      if (red) {
+        self._plan = null;
+        self._lastRedTurn = turn;
+        return { place: { b: red.b, c: red.c, secretRed: true }, slide: null };
+      }
+      if (!best.placement.ended && best.result.action) {
+        self._plan = {
+          turn,
+          player: me,
+          key: keyOf(best.placement.board),
+          action: best.result.action
+        };
+      } else self._plan = null;
+      return { place: { b: best.b, c: best.c, secretRed: false }, slide: null };
+    }
+
+    self._plan = null;
+    return null;
+  }
+};
