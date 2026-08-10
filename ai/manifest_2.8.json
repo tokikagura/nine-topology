@@ -13,6 +13,50 @@
           "type": "builtin"
         }
       ]
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "models": [
+        {
+          "id": "gpt-strategist-2.8-v1",
+          "name": "GPT Strategist",
+          "version": "2.8 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/GPT/GPT_Strategist_2.8_v1.ntai"
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "models": [
+        {
+          "id": "claude-topologist-2.8-v1",
+          "name": "Claude Topologist",
+          "version": "2.8 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-topologist_2.8_v1.ntai"
+        },
+        {
+          "id": "claude-rush-2.8-v1",
+          "name": "Claude Rush",
+          "version": "2.8 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude_Rush_2.8_v1.ntai"
+        },
+        {
+          "id": "claude-sonnet-steadfast-2.8-v1",
+          "name": "Claude Sonnet Steadfast",
+          "version": "2.8 / v1",
+          "latest": true,
+          "type": "ntai",
+          "file": "ai/models/Claude/Claude-Sonnet_Steadfast_2.8_v1.ntai"
+        }
+      ]
     }
   ]
 }
