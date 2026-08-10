@@ -1,0 +1,827 @@
+/**
+ * NTAI Engine - Claude-Rush
+ * Version: 0.6.0
+ * Author: Claude (Anthropic)
+ * Nine Topology (NTP) v2.6+ 対応 AIエンジン【実験モデル】
+ */
+
+/*
+ * ===== このモデルの仮説 =====
+ * Claude-Topologist(バランス型)は実戦分析の結果「ガス発動まで露出を溜めずじっと待つ」戦略に
+ * 収束し、GPT系モデルとも似た結論に達している。しかしルール変更で、15個以上の一括捕獲は
+ * もう「即敗北」ではなく「その時点の累計得点で勝敗が決まる」(CAPTURE_15_SCORE)方式になった。
+ *
+ * つまり理論上、序盤から積極的に捕獲を重ねて得点のクッションを稼いでおけば、
+ * ガスで一方的に石を持っていかれても得点で押し切れる可能性がある。
+ * このモデルは当初「守りより攻め」「一点集中や露出のリスクは気にしない」を徹底していたが、
+ * GPT_Strategist_v3戦（同格以上に攻めてくる相手）で無防備さがそのまま弱点になることが判明したため、
+ * Topologist比で控えめな重みの最低限の守り（一点集中リスク・露出バランス）を追加している。
+ * 「攻め優先・得点クッションで勝負する」という核心のアイデンティティ自体は維持している。
+ *
+ * さらにGPT_Strategist_v3には、1つの大きな事故ではなく128ターンを通じて絶え間なく
+ * 少しずつ捕獲され続けて大差負けする、という現象が確認された。捕獲数だけを見る脅威スキャンでは
+ * この手の「じわじわ読み負け」を検知できないため、相手も自分と同じ「配置→スライドのコンボ探索」を
+ * してくる前提で、その最善応手を実際に評価してから手を選ぶ層(bestOpponentReplyScore)を追加した。
+ * 実質的に自分のフルターン→相手のフルターンまで読む2手先探索になっている。
+ *
+ * 機械的な部分（座標変換・呼吸点計算・捕獲解決・合法手生成・スライド回転）は
+ * Claude-Topologistと共通（実戦棋譜で検証済みのため踏襲）。
+ * 変えたのは評価関数と意思決定の「性格」のみ。
+ */
+
+(function () {
+  "use strict";
+
+  const WEIGHTS = {
+    materialPerPoint: 16, // 捕獲点差の重み。バランス型(12)よりさらに高くし、捕獲を最優先する
+    stonePresence: 0.05,
+    ownAtari: -4, // 自滅（呼吸点1）だけは今まで通り強く避ける。それ以外のリスクは許容する
+    ownLowLiberty2: -0.5, // バランス型より軽め（守りすぎない）
+    huntBonusPerLibertyPerStone: 0.9, // 相手の連を「呼吸点が少ないほど・大きいほど」積極的に狙いに行くボーナス
+    centerBlockBonus: 0.15,
+    blueTargetWeight: 0.5, // 青石は得点にならなくてもガス保護として無料で価値があるので維持
+    redSynergyPerAdjacentEnemy: 2.2, // 赤石は温存せず、チャンスがあれば序盤からでも積極的に使う（攻めの布石）
+    instantWinScore: 1e9,
+    gasProjectionRange: 20,
+    gasProjectionWeight: 6, // バランス型(9)より低め。ガス一発の予測に怯えすぎず、素点の蓄積を信じる設計
+    // GPT_Strategist_v3との対戦で「守りが完全にゼロだと、同格以上に攻めてくる相手には
+    // 無防備さがそのまま弱点になる」ことが判明したため、最低限の守りを控えめな重みで追加する。
+    // Topologist比でおよそ半分の重み。攻め重視のアイデンティティは維持する。
+    concentrationThreshold: 12,
+    concentrationRiskPerStone: 0.25,
+    concentrationCriticalSize: 14,
+    concentrationCriticalPerStone: 1.5,
+    exposureBalanceWeight: 0.5,
+  };
+
+  const DIRS = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ];
+
+  // ---------------------------------------------------------
+  // 座標変換・盤面変換（Claude-Topologistと共通）
+  // ---------------------------------------------------------
+  function bcToGlobal(b, c) {
+    const blockRow = Math.floor(b / 3);
+    const blockCol = b % 3;
+    const cellRow = Math.floor(c / 3);
+    const cellCol = c % 3;
+    return { row: blockRow * 3 + cellRow, col: blockCol * 3 + cellCol };
+  }
+
+  function globalToBC(row, col) {
+    const b = Math.floor(row / 3) * 3 + Math.floor(col / 3);
+    const c = (row % 3) * 3 + (col % 3);
+    return { b, c };
+  }
+
+  function boardToGrid(board) {
+    const grid = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        const { row, col } = bcToGlobal(b, c);
+        grid[row][col] = board[b][c];
+      }
+    }
+    return grid;
+  }
+
+  function gridToBoard(grid) {
+    const board = Array.from({ length: 9 }, () => new Array(9).fill(null));
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const { b, c } = globalToBC(row, col);
+        board[b][c] = grid[row][col];
+      }
+    }
+    return board;
+  }
+
+  function deepCloneBoard(board) {
+    return board.map((block) => block.slice());
+  }
+
+  function rotateBlockCells(cells, dir) {
+    const res = new Array(9);
+    const rows = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+    ];
+    if (dir === "right") {
+      for (const [i0, i1, i2] of rows) {
+        res[i0] = cells[i2];
+        res[i1] = cells[i0];
+        res[i2] = cells[i1];
+      }
+    } else if (dir === "left") {
+      for (const [i0, i1, i2] of rows) {
+        res[i0] = cells[i1];
+        res[i1] = cells[i2];
+        res[i2] = cells[i0];
+      }
+    } else if (dir === "down") {
+      for (let i = 0; i < 3; i++) {
+        res[0 * 3 + i] = cells[2 * 3 + i];
+        res[1 * 3 + i] = cells[0 * 3 + i];
+        res[2 * 3 + i] = cells[1 * 3 + i];
+      }
+    } else if (dir === "up") {
+      for (let i = 0; i < 3; i++) {
+        res[0 * 3 + i] = cells[1 * 3 + i];
+        res[1 * 3 + i] = cells[2 * 3 + i];
+        res[2 * 3 + i] = cells[0 * 3 + i];
+      }
+    } else {
+      throw new Error("unknown slide direction: " + dir);
+    }
+    return res;
+  }
+
+  function findGroups(grid, predicate) {
+    const visited = new Set();
+    const groups = [];
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const key = r + "," + c;
+        if (visited.has(key)) continue;
+        if (!predicate(grid[r][c])) continue;
+        const stack = [[r, c]];
+        visited.add(key);
+        const cells = new Set([key]);
+        const liberties = new Set();
+        while (stack.length) {
+          const [cr, cc] = stack.pop();
+          for (const [dr, dc] of DIRS) {
+            const nr = cr + dr;
+            const nc = cc + dc;
+            if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+            const val = grid[nr][nc];
+            const nkey = nr + "," + nc;
+            if (val === null) {
+              liberties.add(nkey);
+              continue;
+            }
+            if (predicate(val) && !visited.has(nkey)) {
+              visited.add(nkey);
+              cells.add(nkey);
+              stack.push([nr, nc]);
+            }
+          }
+        }
+        groups.push({ cells, liberties });
+      }
+    }
+    return groups;
+  }
+
+  function hasEmptyNeighbor(grid, r, c) {
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+      if (grid[nr][nc] === null) return true;
+    }
+    return false;
+  }
+
+  function resolveCaptures(grid) {
+    const toRemove = [];
+    for (const color of ["white", "black", "blue"]) {
+      const groups = findGroups(grid, (v) => v === color);
+      for (const g of groups) {
+        if (g.liberties.size === 0) {
+          for (const key of g.cells) {
+            const [r, c] = key.split(",").map(Number);
+            toRemove.push({ r, c, color });
+          }
+        }
+      }
+    }
+    const newGrid = grid.map((row) => row.slice());
+    let capturedWhite = 0,
+      capturedBlack = 0,
+      capturedBlue = 0;
+    for (const { r, c, color } of toRemove) {
+      newGrid[r][c] = null;
+      if (color === "white") capturedWhite++;
+      else if (color === "black") capturedBlack++;
+      else capturedBlue++;
+    }
+    return { grid: newGrid, capturedWhite, capturedBlack, capturedBlue };
+  }
+
+  function applyGasNeutralize(grid) {
+    const toConvert = [];
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const v = grid[r][c];
+        if ((v === "white" || v === "black") && hasEmptyNeighbor(grid, r, c)) {
+          toConvert.push([r, c]);
+        }
+      }
+    }
+    const newGrid = grid.map((row) => row.slice());
+    for (const [r, c] of toConvert) newGrid[r][c] = "neutral";
+    return newGrid;
+  }
+
+  // 実戦棋譜で、ガスのneutral化は1回きりではなく複数ターンにわたって波状に発生することが
+  // 確認できたため（1局で7回連鎖した例もある）、収束するまで反復して合計被害を返す。
+  function simulateGasAndCaptures(board) {
+    let grid = boardToGrid(board);
+    let totalCapturedWhite = 0,
+      totalCapturedBlack = 0,
+      totalCapturedBlue = 0;
+    for (let wave = 0; wave < 20; wave++) {
+      const gasGrid = applyGasNeutralize(grid);
+      const resolved = resolveCaptures(gasGrid);
+      totalCapturedWhite += resolved.capturedWhite;
+      totalCapturedBlack += resolved.capturedBlack;
+      totalCapturedBlue += resolved.capturedBlue;
+      let changed = false;
+      for (let r = 0; r < 9 && !changed; r++) {
+        for (let c = 0; c < 9; c++) {
+          if (grid[r][c] !== resolved.grid[r][c]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      grid = resolved.grid;
+      if (!changed) break;
+    }
+    return {
+      board: gridToBoard(grid),
+      capturedWhite: totalCapturedWhite,
+      capturedBlack: totalCapturedBlack,
+      capturedBlue: totalCapturedBlue,
+    };
+  }
+
+  function simulateMove(board, move, mover) {
+    const opponent = mover === "white" ? "black" : "white";
+
+    if (move.slide && move.slide.pass) {
+      return {
+        board: deepCloneBoard(board),
+        capturedWhite: 0,
+        capturedBlack: 0,
+        capturedBlue: 0,
+        moverGainPts: 0,
+        opponentGainPts: 0,
+        moverCapturedCount: 0,
+        opponentCapturedCount: 0,
+      };
+    }
+
+    let newBoard = deepCloneBoard(board);
+
+    if (move.place && move.place.secretRed) {
+      return {
+        board: newBoard,
+        capturedWhite: 0,
+        capturedBlack: 0,
+        capturedBlue: 0,
+        moverGainPts: 0,
+        opponentGainPts: 0,
+        moverCapturedCount: 0,
+        opponentCapturedCount: 0,
+      };
+    }
+
+    if (move.place) {
+      newBoard[move.place.b][move.place.c] = mover;
+    } else if (move.slide) {
+      newBoard[move.slide.b] = rotateBlockCells(board[move.slide.b], move.slide.dir);
+    }
+
+    const grid = boardToGrid(newBoard);
+    const resolved = resolveCaptures(grid);
+    const finalBoard = gridToBoard(resolved.grid);
+
+    let moverGainPts, opponentGainPts, moverCapturedCount, opponentCapturedCount;
+    if (mover === "white") {
+      moverGainPts = resolved.capturedBlack * 1 + resolved.capturedBlue * 5;
+      opponentGainPts = resolved.capturedWhite * 1;
+      moverCapturedCount = resolved.capturedBlack + resolved.capturedBlue;
+      opponentCapturedCount = resolved.capturedWhite;
+    } else {
+      moverGainPts = resolved.capturedWhite * 1 + resolved.capturedBlue * 5;
+      opponentGainPts = resolved.capturedBlack * 1;
+      moverCapturedCount = resolved.capturedWhite + resolved.capturedBlue;
+      opponentCapturedCount = resolved.capturedBlack;
+    }
+
+    return {
+      board: finalBoard,
+      capturedWhite: resolved.capturedWhite,
+      capturedBlack: resolved.capturedBlack,
+      capturedBlue: resolved.capturedBlue,
+      moverGainPts,
+      opponentGainPts,
+      moverCapturedCount,
+      opponentCapturedCount,
+    };
+  }
+
+  function generatePlaceMoves(board, gameState) {
+    const moves = [];
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) {
+          moves.push({ place: { b, c, secretRed: false }, slide: null });
+          if (gameState.redWallsLeft > 0) {
+            moves.push({ place: { b, c, secretRed: true }, slide: null });
+          }
+        }
+      }
+    }
+    if (moves.length === 0) {
+      moves.push({ place: null, slide: { pass: true } });
+    }
+    return moves;
+  }
+
+  function generateSlideMoves(board, gameState) {
+    const dirs = ["up", "down", "left", "right"];
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const moves = [];
+    moves.push({ place: null, slide: { pass: true } });
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        moves.push({ place: null, slide: { b, dir } });
+      }
+    }
+    return moves;
+  }
+
+  function adjacentEmptyCellsToColor(board, color) {
+    const grid = boardToGrid(board);
+    const result = [];
+    const seen = new Set();
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (grid[r][c] !== color) continue;
+        for (const [dr, dc] of DIRS) {
+          const nr = r + dr;
+          const nc = c + dc;
+          if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+          if (grid[nr][nc] === null) {
+            const key = nr + "," + nc;
+            if (!seen.has(key)) {
+              seen.add(key);
+              const { b, c: cc } = globalToBC(nr, nc);
+              result.push({ b, c: cc });
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  function opponentThreatMagnitude(board, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const dirs = ["up", "down", "left", "right"];
+    let maxCaptured = 0;
+
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        const sim = simulateMove(board, { place: null, slide: { b, dir } }, opp);
+        if (sim.moverCapturedCount > maxCaptured) maxCaptured = sim.moverCapturedCount;
+      }
+    }
+
+    const candidateCells = adjacentEmptyCellsToColor(board, us);
+    for (const { b, c } of candidateCells) {
+      const sim1 = simulateMove(board, { place: { b, c, secretRed: false }, slide: null }, opp);
+      if (sim1.moverCapturedCount > maxCaptured) maxCaptured = sim1.moverCapturedCount;
+      for (let b2 = 0; b2 < 9; b2++) {
+        if (locked.has(b2)) continue;
+        for (const dir of dirs) {
+          const sim2 = simulateMove(sim1.board, { place: null, slide: { b: b2, dir } }, opp);
+          const total = sim1.moverCapturedCount + sim2.moverCapturedCount;
+          if (total > maxCaptured) maxCaptured = total;
+        }
+      }
+    }
+
+    return maxCaptured;
+  }
+
+  function fallbackMove(board, gameState) {
+    const phase = (gameState && gameState.phase) || "place";
+    if (phase === "slide") {
+      const locked = new Set((gameState && gameState.slideLockedBlocks) || []);
+      for (let b = 0; b < 9; b++) {
+        if (!locked.has(b)) return { place: null, slide: { b, dir: "right" } };
+      }
+      return { place: null, slide: { pass: true } };
+    }
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (board[b][c] === null) {
+          return { place: { b, c, secretRed: false }, slide: null };
+        }
+      }
+    }
+    return { place: null, slide: { pass: true } };
+  }
+
+  // ---------------------------------------------------------
+  // ここから戦略部分（Rush専用）
+  // ---------------------------------------------------------
+
+  // 現在の累計得点(gameState.scores)を取得。無ければ0扱い。
+  function currentScores(gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const my = gameState.scores && typeof gameState.scores[us] === "number" ? gameState.scores[us] : 0;
+    const op = gameState.scores && typeof gameState.scores[opp] === "number" ? gameState.scores[opp] : 0;
+    return { my, op };
+  }
+
+  // 15個以上の一括捕獲が絡む手を、「即勝利/即敗北」ではなく「その時点の得点でどちらが勝つか」で判定する。
+  // CAPTURE_15_SCOREルールの核心を突いた、このモデル最大のポイント。
+  function scoreAwareEndgameCheck(sim, gameState, us) {
+    if (sim.moverCapturedCount < 15 && sim.opponentCapturedCount < 15) return null;
+    const { my, op } = currentScores(gameState, us);
+    const finalMy = my + sim.moverGainPts;
+    const finalOp = op + sim.opponentGainPts;
+    if (finalMy > finalOp) return WEIGHTS.instantWinScore;
+    if (finalMy < finalOp) return -WEIGHTS.instantWinScore;
+    return 0; // 同点＝実質引き分け
+  }
+
+  function gasProjectionScoreRush(board, gameState, us) {
+    if (gameState.emptyCount === undefined || gameState.emptyCount > WEIGHTS.gasProjectionRange) return 0;
+    const range = WEIGHTS.gasProjectionRange;
+    const proximity = Math.max(0.25, Math.min(1, 1 - (gameState.emptyCount - 10) / (range - 10)));
+
+    const proj = simulateGasAndCaptures(board);
+    let moverGain, oppGain;
+    if (us === "white") {
+      moverGain = proj.capturedBlack * 1 + proj.capturedBlue * 5;
+      oppGain = proj.capturedWhite * 1;
+    } else {
+      moverGain = proj.capturedWhite * 1 + proj.capturedBlue * 5;
+      oppGain = proj.capturedBlack * 1;
+    }
+    // バランス型と違い、15個以上の即死パニックガードは入れない。
+    // CAPTURE_15_SCOREでは損失の大小より「その瞬間の得点」がすべてなので、
+    // ここでは通常の得点差として素直に評価するだけに留める。
+    return (moverGain - oppGain) * WEIGHTS.gasProjectionWeight * proximity;
+  }
+
+  const BLUE_TARGETS = [
+    { turn: 1, b: 0, c: 8 },
+    { turn: 12, b: 8, c: 0 },
+    { turn: 50, b: 4, c: 4 },
+  ];
+
+  function blueTargetBonus(grid, gameState, us) {
+    if (!gameState.turnNumber) return 0;
+    const opp = us === "white" ? "black" : "white";
+    let bonus = 0;
+    for (const target of BLUE_TARGETS) {
+      const { row, col } = bcToGlobal(target.b, target.c);
+      const cellValue = grid[row][col];
+      const turnsUntil = target.turn - gameState.turnNumber;
+      if (turnsUntil < -5 || turnsUntil > 25) continue;
+      const proximity = Math.max(0.1, Math.min(1, 1 - Math.abs(turnsUntil) / 25));
+      if (cellValue !== null) {
+        if (turnsUntil > 0 && cellValue === us) bonus -= WEIGHTS.blueTargetWeight * 2 * proximity;
+        continue;
+      }
+      let ownAdj = 0,
+        oppAdj = 0;
+      for (const [dr, dc] of DIRS) {
+        const nr = row + dr;
+        const nc = col + dc;
+        if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+        if (grid[nr][nc] === us) ownAdj++;
+        else if (grid[nr][nc] === opp) oppAdj++;
+      }
+      bonus += (ownAdj - oppAdj) * WEIGHTS.blueTargetWeight * proximity;
+    }
+    return bonus;
+  }
+
+  // 露出バランス（控えめな重み）。ガスは露出した石をまとめて薙ぎ払うため、Rushでも
+  // 完全に無視はせず、Topologist比で軽い重みだけ持たせる。
+  function exposureBalanceScoreRush(grid, gameState, us) {
+    if (gameState.emptyCount === undefined) return 0;
+    const opp = us === "white" ? "black" : "white";
+    let ownExposed = 0,
+      oppExposed = 0;
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const v = grid[r][c];
+        if (v === us && hasEmptyNeighbor(grid, r, c)) ownExposed++;
+        else if (v === opp && hasEmptyNeighbor(grid, r, c)) oppExposed++;
+      }
+    }
+    const proximity = Math.max(0.15, Math.min(1, 1 - (gameState.emptyCount - 10) / 60));
+    return (oppExposed - ownExposed) * WEIGHTS.exposureBalanceWeight * proximity;
+  }
+
+  // 局面評価：一点集中リスク・露出バランスは控えめな重みで残しつつ(GPT_Strategist_v3戦の教訓)、
+  // 「相手の連をどれだけ追い詰めているか」を呼吸点×サイズで積極的に評価するのが引き続き主軸。
+  function evaluatePositionRush(grid, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    let score = 0;
+
+    const usGroups = findGroups(grid, (v) => v === us);
+    const oppGroups = findGroups(grid, (v) => v === opp);
+
+    for (const g of usGroups) {
+      score += g.cells.size * WEIGHTS.stonePresence;
+      // 自滅（呼吸点1）だけは避ける。それ以外は攻めのためのコストとして許容する。
+      if (g.liberties.size === 1) score += WEIGHTS.ownAtari;
+      else if (g.liberties.size === 2) score += WEIGHTS.ownLowLiberty2;
+      // 一点集中リスクは完全無視ではなく、控えめな重みで残す(GPT_Strategist_v3戦での教訓)
+      if (g.cells.size > WEIGHTS.concentrationThreshold) {
+        score += (WEIGHTS.concentrationThreshold - g.cells.size) * WEIGHTS.concentrationRiskPerStone;
+      }
+      if (g.cells.size > WEIGHTS.concentrationCriticalSize) {
+        score += (WEIGHTS.concentrationCriticalSize - g.cells.size) * WEIGHTS.concentrationCriticalPerStone;
+      }
+    }
+    for (const g of oppGroups) {
+      score -= g.cells.size * WEIGHTS.stonePresence;
+      // 相手の連を「呼吸点が少ないほど・大きいほど」積極的に狙う攻めボーナス
+      const libertyPressure = Math.max(0, 6 - g.liberties.size);
+      score += libertyPressure * g.cells.size * WEIGHTS.huntBonusPerLibertyPerStone;
+    }
+
+    score += exposureBalanceScoreRush(grid, gameState, us);
+    score += blueTargetBonus(grid, gameState, us);
+
+    for (let r = 3; r <= 5; r++) {
+      for (let c = 3; c <= 5; c++) {
+        if (grid[r][c] === us) score += WEIGHTS.centerBlockBonus;
+        else if (grid[r][c] === opp) score -= WEIGHTS.centerBlockBonus;
+      }
+    }
+
+    return score;
+  }
+
+  function evaluateNormalMoveRush(board, move, gameState, us) {
+    const sim = simulateMove(board, move, us);
+    const endgame = scoreAwareEndgameCheck(sim, gameState, us);
+    if (endgame !== null) return endgame;
+
+    const materialDiff = sim.moverGainPts - sim.opponentGainPts;
+    let score = materialDiff * WEIGHTS.materialPerPoint;
+
+    const grid = boardToGrid(sim.board);
+    score += evaluatePositionRush(grid, gameState, us);
+    score += gasProjectionScoreRush(sim.board, gameState, us);
+    return score;
+  }
+
+  function evaluateSecretRedMoveRush(board, move, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const { row, col } = bcToGlobal(move.place.b, move.place.c);
+    const grid = boardToGrid(board);
+    let adjEnemy = 0;
+    for (const [dr, dc] of DIRS) {
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr < 0 || nr > 8 || nc < 0 || nc > 8) continue;
+      if (grid[nr][nc] === opp) adjEnemy++;
+    }
+    // バランス型と違い温存しない：チャンスがあれば序盤からでも積極的に使う（攻めの布石）
+    let score = -0.3 + adjEnemy * WEIGHTS.redSynergyPerAdjacentEnemy;
+    // 直近で不発(RED_FAIL)になったマスは避ける（出現前に他の石で潰されると不発になることが実戦で確認済み）
+    if (isRecentlyFailedRedCell(move.place.b, move.place.c, gameState)) {
+      score -= 6.0;
+    }
+    return score;
+  }
+
+  function evaluatePlacementWithComboRush(board, move, gameState, us) {
+    const sim1 = simulateMove(board, move, us);
+    const endgame1 = scoreAwareEndgameCheck(sim1, gameState, us);
+    if (endgame1 !== null) return { score: endgame1, finalBoard: sim1.board };
+
+    const locked = new Set(gameState.slideLockedBlocks || []);
+    const dirs = ["up", "down", "left", "right"];
+
+    let bestFinal = -Infinity;
+    let bestBoard = sim1.board;
+
+    {
+      const grid = boardToGrid(sim1.board);
+      const positional = evaluatePositionRush(grid, gameState, us);
+      bestFinal =
+        (sim1.moverGainPts - sim1.opponentGainPts) * WEIGHTS.materialPerPoint +
+        positional +
+        gasProjectionScoreRush(sim1.board, gameState, us);
+      bestBoard = sim1.board;
+    }
+
+    for (let b = 0; b < 9; b++) {
+      if (locked.has(b)) continue;
+      for (const dir of dirs) {
+        const sim2 = simulateMove(sim1.board, { place: null, slide: { b, dir } }, us);
+        const combinedSim = {
+          moverCapturedCount: sim1.moverCapturedCount + sim2.moverCapturedCount,
+          opponentCapturedCount: sim1.opponentCapturedCount + sim2.opponentCapturedCount,
+          moverGainPts: sim1.moverGainPts + sim2.moverGainPts,
+          opponentGainPts: sim1.opponentGainPts + sim2.opponentGainPts,
+        };
+        const endgame2 = scoreAwareEndgameCheck(combinedSim, gameState, us);
+        if (endgame2 !== null) {
+          if (endgame2 > bestFinal) {
+            bestFinal = endgame2;
+            bestBoard = sim2.board;
+          }
+          continue;
+        }
+        const grid = boardToGrid(sim2.board);
+        const positional = evaluatePositionRush(grid, gameState, us);
+        const finalScore =
+          (combinedSim.moverGainPts - combinedSim.opponentGainPts) * WEIGHTS.materialPerPoint +
+          positional +
+          gasProjectionScoreRush(sim2.board, gameState, us);
+        if (finalScore > bestFinal) {
+          bestFinal = finalScore;
+          bestBoard = sim2.board;
+        }
+      }
+    }
+
+    return { score: bestFinal, finalBoard: bestBoard };
+  }
+
+  // 脅威も「即敗北」ではなく得点で判断。それでも勝ち越せるなら過度に恐れない。
+  function computeEmptyCount(board) {
+    let n = 0;
+    for (let b = 0; b < 9; b++) for (let c = 0; c < 9; c++) if (board[b][c] === null) n++;
+    return n;
+  }
+
+  // 相手も自分と同じ「配置→スライドのコンボ探索」をしてくると仮定し、その最善応手を
+  // 実際に評価してからこちらの手を選ぶ（実質2手先＝自分のフルターン→相手のフルターンまで読む）。
+  // 捕獲数だけを見る opponentThreatMagnitude より精度が高い（局面の質そのものを評価できる）が
+  // 計算コストも高いため、呼び出し元で候補を絞ってから使う。
+  // SECRET_RED申告はこのサブ探索では考慮しない（近似・高速化のため）。
+  function bestOpponentReplyScore(board, gameState, us) {
+    const opp = us === "white" ? "black" : "white";
+    const emptyCount = computeEmptyCount(board);
+    const oppGameState = {
+      player: opp,
+      phase: "place",
+      redWallsLeft: 0,
+      scores: gameState.scores,
+      turnNumber: gameState.turnNumber,
+      emptyCount,
+      gasPhaseActive: gameState.gasPhaseActive,
+      slideLockedBlocks: gameState.slideLockedBlocks,
+    };
+    const candidates = generatePlaceMoves(board, oppGameState);
+    if (candidates.length === 1 && candidates[0].slide && candidates[0].slide.pass) return 0;
+
+    const quickScored = candidates
+      .filter((m) => m.place)
+      .map((move) => ({ move, quickScore: evaluateNormalMoveRush(board, move, oppGameState, opp) }));
+    quickScored.sort((a, b) => b.quickScore - a.quickScore);
+    const pool = quickScored.slice(0, 6); // コスト抑制のため上位6手のみコンボ探索
+
+    let best = -Infinity;
+    for (const { move } of pool) {
+      const combo = evaluatePlacementWithComboRush(board, move, oppGameState, opp);
+      if (combo.score > best) best = combo.score;
+    }
+    return best === -Infinity ? 0 : best;
+  }
+
+  function threatPenaltyRush(magnitude, gameState, us) {
+    if (magnitude < 15) return magnitude * WEIGHTS.materialPerPoint * 0.7;
+    const { my, op } = currentScores(gameState, us);
+    if (my - magnitude > op) return magnitude * WEIGHTS.materialPerPoint * 0.7;
+    return WEIGHTS.instantWinScore * 0.7;
+  }
+
+  const redDeclarationMemory = [];
+  const redFailedCells = new Map();
+
+  function updateRedMemory(board, gameState) {
+    for (let i = redDeclarationMemory.length - 1; i >= 0; i--) {
+      const entry = redDeclarationMemory[i];
+      if (gameState.turnNumber > entry.turn + 2) {
+        const stillPending = board[entry.b][entry.c] === "red";
+        if (!stillPending) {
+          redFailedCells.set(entry.b + "," + entry.c, gameState.turnNumber);
+        }
+        redDeclarationMemory.splice(i, 1);
+      }
+    }
+  }
+
+  function isRecentlyFailedRedCell(b, c, gameState) {
+    const key = b + "," + c;
+    if (!redFailedCells.has(key)) return false;
+    const failedTurn = redFailedCells.get(key);
+    return gameState.turnNumber - failedTurn < 20;
+  }
+
+  window.NTAI_Engine = {
+    name: "Claude-Rush",
+    author: "Claude (Anthropic)",
+    version: "0.6.0", // 0.4=控えめな守り追加 / 0.5=2手先読み導入 / 0.6=絞り込み幅を終盤ほど動的に広げる
+
+    decideNextMove: function (board, gameState) {
+      try {
+        updateRedMemory(board, gameState);
+        const us = gameState.player;
+        const phase = gameState.phase;
+
+        let evaluated = [];
+
+        if (phase === "slide") {
+          const candidates = generateSlideMoves(board, gameState);
+          if (candidates.length === 1 && candidates[0].slide.pass) return candidates[0];
+          for (const move of candidates) {
+            const score = evaluateNormalMoveRush(board, move, gameState, us);
+            const sim = simulateMove(board, move, us);
+            evaluated.push({ move, score, finalBoard: sim.board });
+          }
+        } else {
+          const candidates = generatePlaceMoves(board, gameState);
+          if (candidates.length === 1 && candidates[0].slide && candidates[0].slide.pass) return candidates[0];
+
+          const normalMoves = candidates.filter((m) => m.place && !m.place.secretRed);
+          const redMoves = candidates.filter((m) => m.place && m.place.secretRed);
+
+          const quickScored = normalMoves.map((move) => ({
+            move,
+            quickScore: evaluateNormalMoveRush(board, move, gameState, us),
+          }));
+          quickScored.sort((a, b) => b.quickScore - a.quickScore);
+          // 終盤ほど候補の母数(空きマス数)自体が減り計算余力が生まれるため、絞り込み幅を動的に広げる。
+          const comboPoolSize = gameState.emptyCount <= 35 ? Math.min(normalMoves.length, 25) : 15;
+          const comboPool = quickScored.slice(0, comboPoolSize);
+
+          for (const { move } of comboPool) {
+            const combo = evaluatePlacementWithComboRush(board, move, gameState, us);
+            evaluated.push({ move, score: combo.score, finalBoard: combo.finalBoard });
+          }
+          for (const { move, quickScore } of quickScored.slice(comboPoolSize)) {
+            evaluated.push({ move, score: quickScore, finalBoard: board });
+          }
+
+          for (const move of redMoves) {
+            const score = evaluateSecretRedMoveRush(board, move, gameState, us);
+            evaluated.push({ move, score, finalBoard: board });
+          }
+        }
+
+        if (evaluated.length === 0) return fallbackMove(board, gameState);
+
+        evaluated.sort((a, b) => b.score - a.score);
+        // bestOpponentReplyScoreはコストが高いため候補数を絞るが、これも終盤ほど広げる
+        const nearEndgame = gameState.emptyCount <= 35;
+        const threatCheckCount = phase === "slide" ? (nearEndgame ? 8 : 5) : (nearEndgame ? 7 : 4);
+        const topPool = evaluated.slice(0, threatCheckCount);
+
+        let best = null;
+        let bestAdjusted = -Infinity;
+        for (const cand of topPool) {
+          if (cand.score >= WEIGHTS.instantWinScore * 0.5) {
+            best = cand.move;
+            bestAdjusted = cand.score;
+            break;
+          }
+          const threat = opponentThreatMagnitude(cand.finalBoard, gameState, us);
+          const catastrophePenalty = threatPenaltyRush(threat, gameState, us);
+          // 捕獲数だけでなく、相手が本気でコンボ探索した場合の局面評価そのものも減点材料にする
+          const oppReply = bestOpponentReplyScore(cand.finalBoard, gameState, us);
+          const adjusted = cand.score - catastrophePenalty - oppReply * 0.85;
+          if (adjusted > bestAdjusted) {
+            bestAdjusted = adjusted;
+            best = cand.move;
+          }
+        }
+
+        if (!best) best = evaluated[0].move;
+
+        if (best && best.place && best.place.secretRed) {
+          redDeclarationMemory.push({ turn: gameState.turnNumber, b: best.place.b, c: best.place.c });
+        }
+
+        return best;
+      } catch (e) {
+        return fallbackMove(board, gameState);
+      }
+    },
+  };
+})();
