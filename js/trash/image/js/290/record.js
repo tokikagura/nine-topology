@@ -33,14 +33,14 @@
     else if (gameEndInfo.winner === 'Black') outcome = '0-1';
     else if (gameEndInfo.winner === 'Draw') outcome = '1/2-1/2';
 
-    const recordedTurns = gameEndInfo.turns ?? ntpnMoveHistory.length;
+    const recordedTurns = gameEndInfo.turns ?? Math.max(0, turnNumber - 1);
     const detailLine = gameEndInfo.detail
       ? `[Detail "${sanitizeHeaderValue(gameEndInfo.detail)}"]\n`
       : '';
 
     let ntpnContent =
       `[Game "Nine Topology"]\n` +
-      `[GameVersion "2.9-test"]\n` +
+      `[GameVersion "2.9.1-test"]\n` +
       `[Date "${dateStr}"]\n` +
       `[Time "${timeStr}"]\n` +
       `[White "${whiteName}"]\n` +
@@ -57,7 +57,10 @@
       detailLine +
       `\n`;
 
+    ntpnSetupHistory.forEach(m => { ntpnContent += `${m}\n`; });
+    if (ntpnSetupHistory.length > 0) ntpnContent += `\n`;
     ntpnMoveHistory.forEach(m => { ntpnContent += `${m}\n`; });
+    ntpnSystemEvents.forEach(e => { ntpnContent += `${e}\n`; });
 
     // 棋譜末尾に機械可読な終局イベントを1行追加する。
     // 既存ヘッダと着手記録は変更せず、終局済みの場合だけ出力する。

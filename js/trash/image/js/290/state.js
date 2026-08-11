@@ -27,7 +27,9 @@
   let gasProtectedBoard = Array.from({length: 9}, () => Array(9).fill(false));
   let gasPhaseActive = false;
 
+  let ntpnSetupHistory = [];
   let ntpnMoveHistory = [];
+  let ntpnSystemEvents = [];
   let boardSnapshots = [];
   let undoHistory = [];
   let currentTurnMove = { place: null, slide: null, event: null };
@@ -35,6 +37,7 @@
   let diagnosticContext = 'SYSTEM';
   let botStepSerial = 0;
   let externalDuelAutoStarted = false;
+  let externalEngineLastError = null;
   const DECISIVE_CAPTURE_THRESHOLD = 15;
   const MAX_TURNS = 128; // 大差がつかなくても128ターン終了時に得点判定
   let gameEndInfo = {

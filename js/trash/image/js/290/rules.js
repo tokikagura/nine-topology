@@ -268,7 +268,9 @@ function initGame() {
     board[candidate.block][candidate.cell] = 'blue-reserved';
   }
 
+  ntpnSetupHistory = [];
   ntpnMoveHistory = [];
+  ntpnSystemEvents = [];
   boardSnapshots = [];
   undoHistory = [];
   currentTurnMove = { place: null, slide: null, event: null };
@@ -276,12 +278,13 @@ function initGame() {
   diagnosticContext = 'SYSTEM';
   botStepSerial = 0;
   externalDuelAutoStarted = false;
+  externalEngineLastError = null;
   gameEndInfo = { winner: 'IN_PROGRESS', reason: 'IN_PROGRESS', turns: null, detail: '' };
 
   saveBoardSnapshot();
   const logPanel = document.getElementById('log-panel');
   if (logPanel) logPanel.innerHTML = '';
-  logMessage('システム起動 v2.9-test。Blue=Turn99 / Gas=Turn104 / Blue確保でRain Right。');
+  logMessage('システム起動 v2.9.1-test。Blue=Turn99 / Gas=Turn104 / Blue確保でRain Right。');
   renderBoard();
 }
 
@@ -298,6 +301,7 @@ handleCellClick = function(b, c) {
 };
 
 getExternalMove = function(engine) {
+  externalEngineLastError = null;
   if (!engine || typeof engine.decideNextMove !== 'function') return null;
   try {
     const gameState = {
@@ -336,7 +340,8 @@ getExternalMove = function(engine) {
     }
     return move;
   } catch (error) {
-    logMessage(`【外部AIエラー】${error.message}。内蔵BOTへ切り替えます。`);
+    externalEngineLastError = String(error && error.message ? error.message : error);
+    logMessage(`【外部AIエラー】${externalEngineLastError}。公平性保護のため対局停止対象です。`);
     return null;
   }
 };

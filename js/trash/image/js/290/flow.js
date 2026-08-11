@@ -245,9 +245,14 @@
     if (gamePhase === 'setup') {
       if (!isValidPlaceTarget(b, c)) return;
       saveUndoState();
+      const setupSide = currentPlayer === 'white' ? 'W' : 'B';
       board[b][c] = currentPlayer;
       setupCount++;
+      ntpnSetupHistory.push(`[SETUP ${setupCount} ${setupSide}+B${b+1}-${CELL_NAMES[c]}]`);
       if (setupCount === 4) {
+        // Koの基準を「Setup完了局面」から開始する。Setup前の初期盤面は通常手のKo比較に使わない。
+        boardSnapshots = [];
+        saveBoardSnapshot();
         gamePhase = 'place';
         processRedReservations();
         checkBlueStoneDrop();

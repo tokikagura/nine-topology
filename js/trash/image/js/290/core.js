@@ -26,7 +26,9 @@
     board[8][0] = 'blue-reserved'; // B9-a1: 12ターン目
     board[4][4] = 'blue-reserved'; // B5-b2: 50ターン目
 
+    ntpnSetupHistory = [];
     ntpnMoveHistory = [];
+    ntpnSystemEvents = [];
     boardSnapshots = [];
     undoHistory = [];
     saveBoardSnapshot();
@@ -470,7 +472,10 @@
       blueStonesSecured: { ...blueStonesSecured },
       gasProtectedBoard: gasProtectedBoard.map(row => [...row]),
       gasPhaseActive,
+      ntpnSetupHistory: [...ntpnSetupHistory],
       ntpnMoveHistory: [...ntpnMoveHistory],
+      ntpnSystemEvents: [...ntpnSystemEvents],
+      externalEngineLastError,
       boardSnapshots: boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) })),
       currentTurnMove: cloneTurnMove(currentTurnMove),
       turnNumber
@@ -503,7 +508,10 @@
     blueStonesSecured = { ...state.blueStonesSecured };
     gasProtectedBoard = state.gasProtectedBoard.map(row => [...row]);
     gasPhaseActive = state.gasPhaseActive;
+    ntpnSetupHistory = [...(state.ntpnSetupHistory || [])];
     ntpnMoveHistory = [...state.ntpnMoveHistory];
+    ntpnSystemEvents = [...(state.ntpnSystemEvents || [])];
+    externalEngineLastError = state.externalEngineLastError || null;
     boardSnapshots = state.boardSnapshots.map(snap => ({ turn: snap.turn, board: snap.board.map(row => [...row]) }));
     currentTurnMove = cloneTurnMove(state.currentTurnMove);
     turnNumber = state.turnNumber;
