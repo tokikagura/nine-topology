@@ -1,0 +1,16 @@
+Nine Topology v2.9.1-test
+
+対象: v2.9-test のバグ修正のみ。ゲームルール自体は変更しない方針。
+
+修正:
+1. Setup 4手をNTPNへ [SETUP ...] として記録。
+2. Setup完了局面をKo判定の基準盤面として再初期化。Setup前盤面が通常手のKo比較に混入する問題を修正。
+3. 外部AIが例外・欠落・不正手を返した場合、内蔵BOTへ黙ってフォールバックせず対局を中断。
+4. 中断時は [EVENT:ENGINE_ABORT ...] をNTPNへ記録。
+5. 外部AI対局の停止後に200ms監視で勝手に再始動しにくいよう externalDuelAutoStarted を保持。
+6. GameVersion / 表示を 2.9.1-test に更新。
+
+未変更・要仕様確認:
+- Blue Reserved: 現行の固定復元処理を維持。
+- Red Wallの宣言合法性: 通常石の自殺/Ko判定を共有する現仕様は、ルール定義確認まで変更しない。
+- Blue候補の同点処理: 過去着手へ遡る現仕様は、正式Tie-break確認まで変更しない。
