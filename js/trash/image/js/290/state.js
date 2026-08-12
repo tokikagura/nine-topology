@@ -38,6 +38,7 @@
   let botStepSerial = 0;
   let externalDuelAutoStarted = false;
   let externalEngineLastError = null;
+  let externalEngineLastResponse = null;
   const DECISIVE_CAPTURE_THRESHOLD = 15;
   const MAX_TURNS = 128; // 大差がつかなくても128ターン終了時に得点判定
   let gameEndInfo = {

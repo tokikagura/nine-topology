@@ -279,12 +279,13 @@ function initGame() {
   botStepSerial = 0;
   externalDuelAutoStarted = false;
   externalEngineLastError = null;
+  externalEngineLastResponse = null;
   gameEndInfo = { winner: 'IN_PROGRESS', reason: 'IN_PROGRESS', turns: null, detail: '' };
 
   saveBoardSnapshot();
   const logPanel = document.getElementById('log-panel');
   if (logPanel) logPanel.innerHTML = '';
-  logMessage('システム起動 v2.9.1-test。Blue=Turn99 / Gas=Turn104 / Blue確保でRain Right。');
+  logMessage('システム起動 v2.9.2-test。Blue=Turn99 / Gas=Turn104 / Blue確保でRain Right。');
   renderBoard();
 }
 
@@ -302,6 +303,7 @@ handleCellClick = function(b, c) {
 
 getExternalMove = function(engine) {
   externalEngineLastError = null;
+  externalEngineLastResponse = null;
   if (!engine || typeof engine.decideNextMove !== 'function') return null;
   try {
     const gameState = {
@@ -334,6 +336,7 @@ getExternalMove = function(engine) {
       slideLockedBlocks: [...slideLockedBlocks]
     };
     const move = engine.decideNextMove(board.map(block => [...block]), gameState);
+    externalEngineLastResponse = move;
     if (gamePhase === 'place' && move && move.rain === true && v290CanCallRain()) {
       callRain();
       logMessage('【外部AI判断】RAIN DECLARE');

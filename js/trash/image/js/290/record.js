@@ -40,7 +40,7 @@
 
     let ntpnContent =
       `[Game "Nine Topology"]\n` +
-      `[GameVersion "2.9.1-test"]\n` +
+      `[GameVersion "2.9.2-test"]\n` +
       `[Date "${dateStr}"]\n` +
       `[Time "${timeStr}"]\n` +
       `[White "${whiteName}"]\n` +

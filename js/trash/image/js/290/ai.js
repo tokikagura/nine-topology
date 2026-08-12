@@ -121,6 +121,86 @@
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
+  function collectLegalPlaceTargets() {
+    const targets = [];
+    for (let b = 0; b < 9; b++) {
+      for (let c = 0; c < 9; c++) {
+        if (isValidPlaceTarget(b, c)) targets.push({ b, c });
+      }
+    }
+    return targets;
+  }
+
+  function collectLegalSetupTargets() {
+    const targets = [];
+    for (const b of CORNER_BLOCKS) {
+      for (let c = 0; c < 9; c++) {
+        if (isValidPlaceTarget(b, c)) targets.push({ b, c });
+      }
+    }
+    return targets;
+  }
+
+  function diagnosticResponseText(value) {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    try {
+      const text = JSON.stringify(value, (_key, item) => {
+        if (typeof item === 'function') return '[Function]';
+        if (typeof item === 'bigint') return String(item);
+        return item;
+      });
+      return String(text ?? value).replace(/[\r\n\]]+/g, ' ').slice(0, 260);
+    } catch (_) {
+      return String(value).replace(/[\r\n\]]+/g, ' ').slice(0, 260);
+    }
+  }
+
+  function legalTargetExamples(targets, limit = 8) {
+    return targets.slice(0, limit)
+      .map(pos => `B${pos.b + 1}-${CELL_NAMES[pos.c]}`)
+      .join(',') || 'none';
+  }
+
+  function classifyInvalidSetupMove(move) {
+    if (externalEngineLastError) return { code: 'ENGINE_EXCEPTION', detail: externalEngineLastError };
+    if (move == null) return { code: 'NULL_RESPONSE', detail: 'AI応答がnull/undefinedです' };
+    if (!move.place) return { code: 'MISSING_PLACE', detail: '応答にplaceがありません' };
+    const { b, c } = move.place;
+    if (!Number.isInteger(b) || !Number.isInteger(c)) return { code: 'BAD_COORD_TYPE', detail: `setup座標が整数ではありません b=${b} c=${c}` };
+    if (b < 0 || b >= 9 || c < 0 || c >= 9) return { code: 'OUT_OF_RANGE', detail: `setup座標が範囲外 b=${b} c=${c}` };
+    if (board[b][c] !== null) return { code: 'OCCUPIED', detail: `setup先B${b+1}-${CELL_NAMES[c]}は${board[b][c]}で埋まっています` };
+    if (!CORNER_BLOCKS.includes(b)) return { code: 'NOT_CORNER', detail: `setup先B${b+1}-${CELL_NAMES[c]}は四隅ブロックではありません` };
+    if (board[b].some(stone => stone === currentPlayer)) return { code: 'DUPLICATE_SETUP_BLOCK', detail: `B${b+1}には自色setup石が既にあります` };
+    return { code: 'UNKNOWN_ILLEGAL', detail: `setup先B${b+1}-${CELL_NAMES[c]}が現行ルールで不合法です` };
+  }
+
+  function classifyInvalidPlaceMove(move) {
+    if (externalEngineLastError) return { code: 'ENGINE_EXCEPTION', detail: externalEngineLastError };
+    if (move == null) return { code: 'NULL_RESPONSE', detail: 'AI応答がnull/undefinedです' };
+    if (!move.place) return { code: 'MISSING_PLACE', detail: '応答にplaceがありません' };
+    const { b, c } = move.place;
+    if (!Number.isInteger(b) || !Number.isInteger(c)) return { code: 'BAD_COORD_TYPE', detail: `place座標が整数ではありません b=${b} c=${c}` };
+    if (b < 0 || b >= 9 || c < 0 || c >= 9) return { code: 'OUT_OF_RANGE', detail: `place座標が範囲外 b=${b} c=${c}` };
+    if (board[b][c] !== null) return { code: 'OCCUPIED', detail: `B${b+1}-${CELL_NAMES[c]}は${board[b][c]}で埋まっています` };
+    if (isSuicideMove(b, c, currentPlayer)) return { code: 'SUICIDE', detail: `B${b+1}-${CELL_NAMES[c]}は現行ルールの自殺手判定です` };
+    if (isKoRepeatMove(b, c, currentPlayer)) return { code: 'KO_REPEAT', detail: `B${b+1}-${CELL_NAMES[c]}はコウによる直前局面再現です` };
+    return { code: 'UNKNOWN_ILLEGAL', detail: `B${b+1}-${CELL_NAMES[c]}が現行ルールで不合法です` };
+  }
+
+  function classifyInvalidSlideMove(move) {
+    if (externalEngineLastError) return { code: 'ENGINE_EXCEPTION', detail: externalEngineLastError };
+    if (move == null) return { code: 'NULL_RESPONSE', detail: 'AI応答がnull/undefinedです' };
+    if (!move.slide) return { code: 'MISSING_SLIDE', detail: '応答にslideがありません' };
+    if (move.slide.pass === true) return { code: 'UNKNOWN_ILLEGAL', detail: 'pass応答を処理できませんでした' };
+    const { b, dir } = move.slide;
+    if (!Number.isInteger(b)) return { code: 'BAD_BLOCK_TYPE', detail: `slide.bが整数ではありません b=${b}` };
+    if (b < 0 || b >= 9) return { code: 'OUT_OF_RANGE', detail: `slideブロックが範囲外 b=${b}` };
+    if (!['up', 'down', 'left', 'right'].includes(dir)) return { code: 'BAD_DIRECTION', detail: `slide方向が不正 dir=${dir}` };
+    if (slideLockedBlocks.includes(b)) return { code: 'BLOCK_LOCKED', detail: `B${b+1}は現在slide禁止です` };
+    return { code: 'UNKNOWN_ILLEGAL', detail: `B${b+1}-${dir}を実行できませんでした` };
+  }
+
   /* === 自動対局用簡易テストBOT === */
   class NineTopologyRestoredTestBot {
     constructor(speedMs = 30) {
@@ -130,16 +210,31 @@
       this.maxMoves = 400; // 128ターン決着より後ろに置く非常停止
     }
 
-    abortExternalTurn(phase, engine, detail) {
+    abortExternalTurn(phase, engine, issue, legalTargets = []) {
       const side = currentPlayer === 'white' ? 'W' : 'B';
       const rawName = engine && engine.name ? String(engine.name) : 'ExternalEngine';
       const safeName = rawName.replace(/[^0-9A-Za-z._-]+/g, '_');
-      const safeDetail = String(detail || 'invalid action').replace(/[\r\n\]]+/g, ' ').slice(0, 180);
-      ntpnSystemEvents.push(`[EVENT:ENGINE_ABORT turn=${turnNumber} side=${side} phase=${phase} engine=${safeName} detail=${safeDetail}]`);
-      diagnosticContext = `ENGINE_ABORT phase=${phase} side=${side}`;
+      const code = issue && issue.code ? issue.code : 'INVALID_ACTION';
+      const rawDetail = issue && issue.detail ? issue.detail : 'invalid action';
+      const safeDetail = String(rawDetail).replace(/[\r\n\]]+/g, ' ').slice(0, 220);
+      const responseText = diagnosticResponseText(externalEngineLastResponse);
+      const examples = legalTargetExamples(legalTargets);
+      const diagnostic = `code=${code} legal=${legalTargets.length} response=${responseText} examples=${examples} detail=${safeDetail}`;
+
+      ntpnSystemEvents.push(
+        `[EVENT:ENGINE_ABORT turn=${turnNumber} side=${side} phase=${phase} engine=${safeName} ${diagnostic}]`
+      );
+      diagnosticContext = `ENGINE_ABORT phase=${phase} side=${side} code=${code}`;
+      gameEndInfo = {
+        winner: 'IN_PROGRESS',
+        reason: 'ENGINE_ABORT',
+        turns: Math.max(0, turnNumber - 1),
+        detail: `${rawName} / ${phase} / ${code} / ${safeDetail}`
+      };
       externalDuelAutoStarted = true;
       this.stop(`外部AI ${rawName} の${phase}応答が無効なため対局を中断`);
-      logMessage(`【外部AI対局中断】${rawName} / phase=${phase} / ${safeDetail}`);
+      logMessage(`【外部AI対局中断】${rawName} / phase=${phase} / code=${code} / legal=${legalTargets.length}`);
+      logMessage(`【診断】response=${responseText} / legal例=${examples} / ${safeDetail}`);
     }
 
     start() {
@@ -148,7 +243,7 @@
         btn.innerText = "【対局中】全自動対局進行中...";
         btn.style.background = "linear-gradient(135deg, #ff0055, #990022)";
       }
-      logMessage("【BOT対局開始】v2.9.1-test スタート！");
+      logMessage("【BOT対局開始】v2.9.2-test スタート！");
       this.moveCount = 0;
       botStepSerial = 0;
       externalDuelAutoStarted = !!(window.NTAI_Engine_White || window.NTAI_Engine_Black || window.NTAI_Engine);
@@ -185,6 +280,9 @@
       }
 
       if (gamePhase === 'setup') {
+        const validTargets = collectLegalSetupTargets();
+        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
+
         const engine = getActiveExternalEngine();
         const externalMove = getExternalMove(engine);
         if (engine) {
@@ -195,17 +293,9 @@
             handleCellClick(externalMove.place.b, externalMove.place.c);
             return;
           }
-          this.abortExternalTurn('setup', engine, externalEngineLastError || '合法なsetup配置が返されませんでした');
+          this.abortExternalTurn('setup', engine, classifyInvalidSetupMove(externalMove), validTargets);
           return;
         }
-
-        const validTargets = [];
-        for (let b of CORNER_BLOCKS) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-          }
-        }
-        if (validTargets.length === 0) throw new Error("準備フェーズ配置不能");
         const choice = validTargets[Math.floor(Math.random() * validTargets.length)];
         logMessage(`【BOT判断】SETUP B${choice.b+1}-${CELL_NAMES[choice.c]}`);
         handleCellClick(choice.b, choice.c);
@@ -213,23 +303,30 @@
       }
 
       if (gamePhase === 'place') {
+        // 先にゲーム本体の合法手を確定する。合法手0なら外部AIへ問い合わせず正常終局。
+        const validTargets = collectLegalPlaceTargets();
+        if (validTargets.length === 0) {
+          const sideName = currentPlayer === 'white' ? '白' : '黒';
+          finishByNoLegalMove(`${sideName}に合法な配置手がありません`);
+          return;
+        }
+
         const engine = getActiveExternalEngine();
         const externalMove = getExternalMove(engine);
         if (externalMove && externalMove.place) {
           const eb = externalMove.place.b;
           const ec = externalMove.place.c;
-          if (Number.isInteger(eb) && Number.isInteger(ec) && board[eb] && isValidPlaceTarget(eb, ec)) {
+          if (Number.isInteger(eb) && Number.isInteger(ec) &&
+              eb >= 0 && eb < 9 && ec >= 0 && ec < 9 &&
+              isValidPlaceTarget(eb, ec)) {
             isWallDeclarationActive = !!externalMove.place.secretRed && wallCount[currentPlayer] > 0;
             logMessage(`【外部AI判断】PLACE B${eb+1}-${CELL_NAMES[ec]} redMode=${isWallDeclarationActive}`);
             handleCellClick(eb, ec);
             return;
           }
-          if (Number.isInteger(eb) && Number.isInteger(ec) && board[eb] && board[eb][ec] === null && isKoRepeatMove(eb, ec, currentPlayer)) {
-            logMessage(`【コウ禁止】外部AIの B${eb+1}-${CELL_NAMES[ec]} は直前局面の再現になるため却下。`);
-          }
         }
         if (engine) {
-          this.abortExternalTurn('place', engine, externalEngineLastError || '合法なplace配置が返されませんでした');
+          this.abortExternalTurn('place', engine, classifyInvalidPlaceMove(externalMove), validTargets);
           return;
         }
 
@@ -238,21 +335,6 @@
           isWallDeclarationActive = true;
         } else {
           isWallDeclarationActive = false;
-        }
-
-        const validTargets = [];
-        for (let b = 0; b < 9; b++) {
-          for (let c = 0; c < 9; c++) {
-            if (isValidPlaceTarget(b, c)) validTargets.push({ b, c });
-          }
-        }
-
-        if (validTargets.length === 0) {
-          // v2.5g: PLACE中に合法手がない状態でskipSlide()を呼ぶと何も起きず、
-          // 同じ手番・同じターンを永久反復していた。ここで得点判定して終局する。
-          const sideName = currentPlayer === 'white' ? '白' : '黒';
-          finishByNoLegalMove(`${sideName}に合法な配置手がありません`);
-          return;
         }
 
         const choice = chooseBuiltInPlacement(validTargets);
@@ -280,7 +362,7 @@
           }
         }
         if (engine) {
-          this.abortExternalTurn('slide', engine, externalEngineLastError || '合法なslideまたはpassが返されませんでした');
+          this.abortExternalTurn('slide', engine, classifyInvalidSlideMove(externalMove), []);
           return;
         }
 
