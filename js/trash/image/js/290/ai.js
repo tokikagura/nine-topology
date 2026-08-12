@@ -183,6 +183,17 @@
     if (!Number.isInteger(b) || !Number.isInteger(c)) return { code: 'BAD_COORD_TYPE', detail: `place座標が整数ではありません b=${b} c=${c}` };
     if (b < 0 || b >= 9 || c < 0 || c >= 9) return { code: 'OUT_OF_RANGE', detail: `place座標が範囲外 b=${b} c=${c}` };
     if (board[b][c] !== null) return { code: 'OCCUPIED', detail: `B${b+1}-${CELL_NAMES[c]}は${board[b][c]}で埋まっています` };
+
+    if (move.place.secretRed === true) {
+      if (wallCount[currentPlayer] <= 0) {
+        return { code: 'NO_RED_LEFT', detail: 'Red Stone宣言権が残っていません' };
+      }
+      if (!isValidRedDeclarationTarget(b, c)) {
+        return { code: 'INVALID_RED_TARGET', detail: `B${b+1}-${CELL_NAMES[c]}はRed Stone宣言対象にできません` };
+      }
+      return { code: 'UNKNOWN_ILLEGAL', detail: `B${b+1}-${CELL_NAMES[c]}のRed Stone宣言を処理できませんでした` };
+    }
+
     if (isSuicideMove(b, c, currentPlayer)) return { code: 'SUICIDE', detail: `B${b+1}-${CELL_NAMES[c]}は現行ルールの自殺手判定です` };
     if (isKoRepeatMove(b, c, currentPlayer)) return { code: 'KO_REPEAT', detail: `B${b+1}-${CELL_NAMES[c]}はコウによる直前局面再現です` };
     return { code: 'UNKNOWN_ILLEGAL', detail: `B${b+1}-${CELL_NAMES[c]}が現行ルールで不合法です` };
@@ -316,10 +327,15 @@
         if (externalMove && externalMove.place) {
           const eb = externalMove.place.b;
           const ec = externalMove.place.c;
-          if (Number.isInteger(eb) && Number.isInteger(ec) &&
-              eb >= 0 && eb < 9 && ec >= 0 && ec < 9 &&
-              isValidPlaceTarget(eb, ec)) {
-            isWallDeclarationActive = !!externalMove.place.secretRed && wallCount[currentPlayer] > 0;
+          const wantsRed = externalMove.place.secretRed === true;
+          const targetLegal = Number.isInteger(eb) && Number.isInteger(ec) &&
+            eb >= 0 && eb < 9 && ec >= 0 && ec < 9 &&
+            (wantsRed
+              ? isValidRedDeclarationTarget(eb, ec)
+              : isValidPlaceTarget(eb, ec));
+
+          if (targetLegal) {
+            isWallDeclarationActive = wantsRed;
             logMessage(`【外部AI判断】PLACE B${eb+1}-${CELL_NAMES[ec]} redMode=${isWallDeclarationActive}`);
             handleCellClick(eb, ec);
             return;

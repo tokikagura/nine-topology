@@ -228,6 +228,8 @@
   }
 
   function isValidPlaceTarget(b, c) {
+    if (!Number.isInteger(b) || !Number.isInteger(c)) return false;
+    if (b < 0 || b >= 9 || c < 0 || c >= 9) return false;
     if (board[b][c] !== null) return false;
     if (gamePhase === 'setup') {
       if (!CORNER_BLOCKS.includes(b)) return false;
@@ -239,6 +241,16 @@
       return true;
     }
     return false;
+  }
+
+  // v2.9: Secret Red is a delayed declaration, not an immediate normal-stone placement.
+  // Normal-stone suicide/Ko checks therefore do not apply to the declaration target.
+  function isValidRedDeclarationTarget(b, c) {
+    if (gamePhase !== 'place') return false;
+    if (!Number.isInteger(b) || !Number.isInteger(c)) return false;
+    if (b < 0 || b >= 9 || c < 0 || c >= 9) return false;
+    if (wallCount[currentPlayer] <= 0) return false;
+    return board[b][c] === null;
   }
 
   function handleCellClick(b, c) {
@@ -260,11 +272,15 @@
       currentPlayer = currentPlayer === 'white' ? 'black' : 'white';
       renderBoard();
     } else if (gamePhase === 'place') {
-      if (!isValidPlaceTarget(b, c)) return;
+      const declaringRed = isWallDeclarationActive && wallCount[currentPlayer] > 0;
+      const legalTarget = declaringRed
+        ? isValidRedDeclarationTarget(b, c)
+        : isValidPlaceTarget(b, c);
+      if (!legalTarget) return;
       saveUndoState();
 
       const cellCoord = CELL_NAMES[c];
-      if (isWallDeclarationActive && wallCount[currentPlayer] > 0) {
+      if (declaringRed) {
         // 赤石（絶対障壁）のシークレット申告 (2ターン後出現: +2ターン)
         wallCount[currentPlayer]--;
         isWallDeclarationActive = false;

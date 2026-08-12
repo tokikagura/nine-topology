@@ -11,7 +11,10 @@
       for (let c = 0; c < 9; c++) {
         const cellEl = document.createElement('div');
         cellEl.className = 'cell';
-        if ((gamePhase === 'setup' || gamePhase === 'place') && isValidPlaceTarget(b, c)) {
+        const manualLegal = gamePhase === 'place' && isWallDeclarationActive
+          ? isValidRedDeclarationTarget(b, c)
+          : isValidPlaceTarget(b, c);
+        if ((gamePhase === 'setup' || gamePhase === 'place') && manualLegal) {
           cellEl.classList.add('manual-target');
           cellEl.onclick = () => handleCellClick(b, c);
         }
